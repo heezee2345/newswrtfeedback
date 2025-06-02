@@ -8,9 +8,10 @@ import tempfile
 # ───── 환경 설정 ─────
 # Streamlit secrets에서 API 키 가져오기
 try:
-    OPENAI_KEY = st.secrets.get("OPENAI_API_KEY", "")
-except:
+    OPENAI_KEY = st.secrets["openai"]["api_key"]
+except KeyError:
     OPENAI_KEY = ""
+
 
 OPENAI_OK = bool(OPENAI_KEY)
 
