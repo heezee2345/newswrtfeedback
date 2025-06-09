@@ -6,12 +6,10 @@ from docx import Document
 import tempfile
 
 # ───── 환경 설정 ─────
-# Streamlit secrets에서 API 키 가져오기
 try:
     OPENAI_KEY = st.secrets["openai"]["api_key"]
 except KeyError:
     OPENAI_KEY = ""
-
 
 OPENAI_OK = bool(OPENAI_KEY)
 
@@ -28,7 +26,6 @@ def summarize_text(text: str) -> str:
     """기사 내용을 영어로 5-10문장으로 요약"""
     if not OPENAI_OK or client is None:
         return "요약 불가: API 오류"
-    
     if not text.strip():
         return "요약 불가: 입력된 텍스트가 없습니다."
     
@@ -44,11 +41,50 @@ def summarize_text(text: str) -> str:
     except Exception as e:
         return f"요약 실패: {e}"
 
+def translate_to_korean(text: str) -> str:
+    """영문 텍스트를 한국어로 번역"""
+    if not OPENAI_OK or client is None:
+        return "번역 불가: API 오류"
+    if "요약 실패" in text or "요약 불가" in text:
+        return "원본 요약이 없어 번역할 수 없습니다."
+    if not text.strip():
+        return "번역 불가: 입력된 텍스트가 없습니다."
+
+    prompt = f"다음 영문 텍스트를 자연스러운 한국어로 번역해줘:\n\n{text}"
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1000
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"번역 실패: {e}"
+
+def translate_to_english(text: str) -> str:
+    """한국어 텍스트를 영어로 번역"""
+    if not OPENAI_OK or client is None:
+        return "번역 불가: API 오류"
+    if not text.strip():
+        return "번역 불가: 입력된 텍스트가 없습니다."
+
+    prompt = f"다음 한국어 텍스트를 자연스러운 영어로 번역해줘:\n\n{text}"
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=1200
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"번역 실패: {e}"
+
 def gpt_feedback(korean_text: str) -> str:
     """한국어 작문에 대한 영어 피드백 제공"""
     if not OPENAI_OK or client is None:
         return "⚠️ GPT 사용을 위한 OpenAI API 키가 설정되지 않았거나 문제가 있습니다."
-    
     if not korean_text.strip():
         return "⚠️ 피드백할 텍스트가 없습니다."
 
@@ -107,11 +143,12 @@ st.set_page_config(
 # ───── 세션 상태 초기화 ─────
 if "stage" not in st.session_state:
     st.session_state.update({
+        "stage": "input",
         "article1": "", "article2": "",
         "summary1": "", "summary2": "",
-        "draft": "", "feedback": "",
-        "final_text": "",
-        "stage": "input"
+        "summary1_kr": "", "summary2_kr": "",
+        "draft": "", "feedback": "", "feedback_kr": "",
+        "final_text": ""
     })
 
 # ───── 메인 타이틀과 경고 메시지 ─────
@@ -159,22 +196,27 @@ if st.session_state.stage == "input":
     
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn2:
-        if st.button("다음 단계 → (요약 생성)", type="primary", use_container_width=True):
+        if st.button("다음 단계 → (요약 및 번역 생성)", type="primary", use_container_width=True):
             if not article1.strip() or not article2.strip():
                 st.error("두 기사 본문을 모두 입력해주세요.")
             else:
                 st.session_state.article1 = article1
                 st.session_state.article2 = article2
                 
-                # 요약 생성
-                with st.spinner("기사 요약을 생성하고 있습니다..."):
+                # 요약 및 번역 생성
+                with st.spinner("기사 요약 및 번역을 생성하고 있습니다... 잠시만 기다려주세요."):
+                    # 영어 요약 생성
                     st.session_state.summary1 = summarize_text(article1)
                     st.session_state.summary2 = summarize_text(article2)
+                    
+                    # 한국어 번역 생성
+                    st.session_state.summary1_kr = translate_to_korean(st.session_state.summary1)
+                    st.session_state.summary2_kr = translate_to_korean(st.session_state.summary2)
                 
                 st.session_state.stage = "draft"
                 st.rerun()
 
-# 2단계: 초안 작성 (0609_draft_part_revised.py의 내용으로 교체 및 통합)
+# 2단계: 초안 작성
 elif st.session_state.stage == "draft":
     st.subheader("② 비교 설명문 초안 작성 (문단별 구성 + AI 힌트 지원)")
 
@@ -185,20 +227,30 @@ elif st.session_state.stage == "draft":
             # st.session_state에 해당 키가 없으면 초기화
             if key not in st.session_state:
                 st.session_state[key] = ""
-            return st.text_area("", key=key, height=160)
+            user_input = st.text_area("", key=key, height=160)
+        
         with col2:
             st.markdown(f"#### 🧭 {guide_title}")
             for line in guide_lines:
                 st.markdown(f"- {line}")
+            
+            # 관련 기사 요약 (영문/한글) 표시
             if summary_text:
-                st.markdown("#### 🗞️ 관련 기사 요약")
-                st.info(summary_text)
+                st.markdown("#### 🗞️ 관련 기사 요약 (영문/한글)")
+                summary_en = summary_text
+                # summary_text가 summary1인지 summary2인지 확인하여 해당하는 한글 번역본을 찾음
+                summary_kr_key = "summary1_kr" if summary_en == st.session_state.get("summary1") else "summary2_kr"
+                summary_kr = st.session_state.get(summary_kr_key, "번역 없음")
+                
+                with st.expander("요약문 보기", expanded=True):
+                    st.info(f"**[English]**\n{summary_en}")
+                    st.success(f"**[한국어]**\n{summary_kr}")
 
             # AI 힌트 버튼
             if hint_key and hint_prompt and OPENAI_OK:
                 if f"{hint_key}_hint" not in st.session_state:
                     st.session_state[f"{hint_key}_hint"] = ""
-                if st.button(f"✏️ AI 힌트 받기 ({title})", key=f"{hint_key}_btn"):
+                if st.button(f"✏️ AI 힌트 받기", key=f"{hint_key}_btn"):
                     with st.spinner("AI 힌트를 생성하는 중입니다..."):
                         try:
                             hint_response = client.chat.completions.create(
@@ -213,6 +265,8 @@ elif st.session_state.stage == "draft":
                 if st.session_state[f"{hint_key}_hint"]:
                     st.markdown("#### 💡 AI 힌트")
                     st.success(st.session_state[f"{hint_key}_hint"])
+        
+        return user_input
 
     # 문단 구성
     intro = paragraph_input_with_guide(
@@ -229,7 +283,7 @@ elif st.session_state.stage == "draft":
             "기사 1의 주장과 근거 요약",
             "자료, 사례, 강조점 기술"
         ],
-        summary_text=st.session_state.summary1,
+        summary_text=st.session_state.get("summary1"),
         hint_key="body1", hint_prompt="첫 번째 기사 내용을 요약하는 문단 작성에 쓸 수 있는 문장 예시 3개를 제시해줘. (한국어)"
     )
 
@@ -238,7 +292,7 @@ elif st.session_state.stage == "draft":
             "기사 2의 주요 내용 요약",
             "기사 1과 비교했을 때의 특징 언급"
         ],
-        summary_text=st.session_state.summary2,
+        summary_text=st.session_state.get("summary2"),
         hint_key="body2", hint_prompt="두 번째 기사 내용을 요약하며 비교하는 문단을 쓰기 위한 문장 예시 3개를 제시해줘. (한국어)"
     )
 
@@ -272,7 +326,7 @@ elif st.session_state.stage == "draft":
     st.session_state.draft = full_draft
 
     st.markdown(f"""<div style="background-color:#f9f9f9; padding:15px; border-radius:10px; color:black; font-size:16px;">
-<pre>{full_draft}</pre>
+<pre style="white-space: pre-wrap; word-wrap: break-word;">{full_draft}</pre>
 </div>""", unsafe_allow_html=True)
 
     col_btn1, col_btn2 = st.columns([1, 1])
@@ -289,9 +343,9 @@ elif st.session_state.stage == "draft":
                 st.session_state.stage = "feedback"
                 st.rerun()
 
-# 3단계: AI 피드백
+# 3단계: AI 피드백 (한국어 번역 추가)
 elif st.session_state.stage == "feedback":
-    st.subheader("③ GPT-4o 피드백")
+    st.subheader("③ GPT-4o 피드백 (영어 + 한국어 번역)")
     
     col1, col2 = st.columns(2)
     
@@ -306,23 +360,45 @@ elif st.session_state.stage == "feedback":
         )
     
     with col2:
-        st.markdown("**AI 피드백 (영어)**")
+        st.markdown("**AI 피드백**")
         
+        # 영어 피드백 생성
         if "feedback" not in st.session_state or not st.session_state.feedback:
             if OPENAI_OK:
                 with st.spinner("AI 피드백을 생성하고 있습니다..."):
                     feedback = gpt_feedback(st.session_state.draft)
                     st.session_state.feedback = feedback
+                    
+                    # 피드백 한국어 번역도 함께 생성
+                    if feedback and "⚠️" not in feedback:
+                        with st.spinner("피드백을 한국어로 번역하고 있습니다..."):
+                            st.session_state.feedback_kr = translate_to_korean(feedback)
+                    else:
+                        st.session_state.feedback_kr = "번역 불가"
             else:
                 st.session_state.feedback = "⚠️ GPT 피드백 기능이 비활성화되어 있습니다."
+                st.session_state.feedback_kr = "⚠️ GPT 피드백 기능이 비활성화되어 있습니다."
         
-        st.text_area(
-            "GPT-4o 피드백",
-            value=st.session_state.feedback,
-            height=400,
-            disabled=True,
-            key="feedback_display"
-        )
+        # 탭으로 영어/한국어 피드백 표시
+        tab1, tab2 = st.tabs(["🇺🇸 English", "🇰🇷 한국어"])
+        
+        with tab1:
+            st.text_area(
+                "GPT-4o 피드백 (영어)",
+                value=st.session_state.feedback,
+                height=350,
+                disabled=True,
+                key="feedback_en_display"
+            )
+        
+        with tab2:
+            st.text_area(
+                "GPT-4o 피드백 (한국어)",
+                value=st.session_state.get("feedback_kr", "번역 중..."),
+                height=350,
+                disabled=True,
+                key="feedback_kr_display"
+            )
     
     st.markdown("---")
     
@@ -330,7 +406,6 @@ elif st.session_state.stage == "feedback":
     with col_btn1:
         if st.button("← 이전 단계", use_container_width=True):
             st.session_state.stage = "draft"
-            # 피드백을 재생성하지 않도록 유지
             st.rerun()
     
     with col_btn2:
@@ -361,7 +436,15 @@ elif st.session_state.stage == "final":
     
     with col2:
         st.markdown("**AI 피드백 참고**")
-        st.info(st.session_state.feedback)
+        
+        # 탭으로 영어/한국어 피드백 표시
+        tab1, tab2 = st.tabs(["🇺🇸 English", "🇰🇷 한국어"])
+        
+        with tab1:
+            st.info(st.session_state.feedback)
+        
+        with tab2:
+            st.info(st.session_state.get("feedback_kr", "번역 없음"))
     
     st.markdown("---")
     
@@ -374,7 +457,7 @@ elif st.session_state.stage == "final":
             st.rerun()
 
     with col_btn2:
-        # 다운로드 버튼을 먼저 생성
+        # 다운로드 버튼
         docx_data = create_docx_content(final_text)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"news_comparison_{timestamp}.docx"
@@ -392,7 +475,8 @@ elif st.session_state.stage == "final":
             # 세션 상태 초기화
             keys_to_reset = [
                 "article1", "article2", "summary1", "summary2", 
-                "draft", "feedback", "final_text", "stage",
+                "summary1_kr", "summary2_kr",
+                "draft", "feedback", "feedback_kr", "final_text", "stage",
                 "intro_input", "body1_input", "body2_input", 
                 "compare_input", "conclusion_input",
                 "intro_hint", "body1_hint", "body2_hint", 
@@ -414,8 +498,8 @@ with st.sidebar:
     st.markdown("### 📝 사용 방법")
     st.markdown("""
     1. **기사 입력**: 비교할 두 기사의 본문을 입력
-    2. **초안 작성**: AI가 생성한 요약을 참고하여 문단별로 비교 설명문 작성 (AI 힌트 지원)
-    3. **AI 피드백**: GPT-4o가 작문에 대한 상세한 피드백 제공
+    2. **초안 작성**: AI가 생성한 요약/번역을 참고하여 문단별로 비교 설명문 작성 (AI 힌트 지원)
+    3. **AI 피드백**: GPT-4o가 작문에 대한 상세한 피드백 제공 (영어 + 한국어 번역)
     4. **최종 완성**: 피드백을 반영하여 수정 후 DOCX 파일로 다운로드
     """)
     
@@ -428,13 +512,15 @@ with st.sidebar:
     st.markdown("### 📊 진행 상황")
     st.markdown(f"현재 단계: **{stage_names[current_stage_idx]}**")
     
-    if st.session_state.get("article1"):
-        st.markdown("✅ 기사 1 입력 완료")
-    if st.session_state.get("article2"):
-        st.markdown("✅ 기사 2 입력 완료")
+    if st.session_state.get("article1") and st.session_state.get("article2"):
+        st.markdown("✅ 기사 입력 완료")
+    if st.session_state.get("summary1_kr") and st.session_state.get("summary2_kr"):
+        st.markdown("✅ 요약/번역 완료")
     if st.session_state.get("draft"):
         st.markdown("✅ 초안 작성 완료")
     if st.session_state.get("feedback"):
         st.markdown("✅ AI 피드백 완료")
+    if st.session_state.get("feedback_kr"):
+        st.markdown("✅ 피드백 번역 완료")
     if st.session_state.get("final_text"):
         st.markdown("✅ 최종 수정 완료")
