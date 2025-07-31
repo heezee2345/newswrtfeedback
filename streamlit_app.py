@@ -4,6 +4,8 @@ import streamlit as st
 from openai import OpenAI, APIError
 from docx import Document
 import tempfile
+import json
+import pandas as pd
 
 # ───── 환경 설정 ─────
 try:
@@ -40,6 +42,111 @@ def summarize_text(text: str) -> str:
         return response.choices[0].message.content.strip()
     except Exception as e:
         return f"요약 실패: {e}"
+
+def analyze_tone_and_stance(text: str) -> dict:
+    """논조 및 입장 분석 - 새로 추가된 핵심 기능"""
+    if not OPENAI_OK or client is None:
+        return {"error": "API 오류"}
+    
+    prompt = f"""
+    다음 기사의 논조와 입장을 분석해주세요:
+    
+    1. 전체적인 논조 (tone): 찬성적/반대적/중립적/회의적 중 하나 선택
+    2. 주요 논점 3가지
+    3. 사용된 감정적 언어나 편향된 표현
+    4. 신뢰도 점수 (1-10점)
+    5. 대상 독자층 추정
+    
+    JSON 형식으로 응답해주세요.
+    
+    기사: {text}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=600
+        )
+        
+        result = response.choices[0].message.content.strip()
+        # JSON 파싱 시도
+        try:
+            return json.loads(result)
+        except:
+            return {"analysis": result}
+    except Exception as e:
+        return {"error": f"분석 실패: {e}"}
+
+def evaluate_writing_rubric(text: str) -> dict:
+    """영어 표현 능력 루브릭 평가 - 새로 추가"""
+    if not OPENAI_OK or client is None:
+        return {"error": "API 오류"}
+    
+    prompt = f"""
+    다음 영어 텍스트를 루브릭 기준으로 평가해주세요:
+    
+    평가 영역:
+    1. 내용 논리성 (Content Logic): 주장의 명확성, 근거 제시, 논리적 연결 (1-4점)
+    2. 구성 체계성 (Organization): 글 구조, 문단 구성, 응집성 (1-4점)  
+    3. 문법·어휘 정확성 (Language Accuracy): 문법 정확성, 어휘 선택, 철자법 (1-4점)
+    
+    각 영역별로 점수와 구체적인 피드백을 JSON 형식으로 제공해주세요.
+    
+    텍스트: {text}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=800
+        )
+        
+        result = response.choices[0].message.content.strip()
+        try:
+            return json.loads(result)
+        except:
+            return {"evaluation": result}
+    except Exception as e:
+        return {"error": f"평가 실패: {e}"}
+
+def assess_problem_solving(reflection_text: str) -> dict:
+    """문제해결 역량 평가 - 새로 추가"""
+    if not OPENAI_OK or client is None:
+        return {"error": "API 오류"}
+    
+    prompt = f"""
+    다음 학습자의 성찰 내용을 바탕으로 문제해결 역량을 평가해주세요:
+    
+    평가 영역:
+    1. 문제이해: 핵심 문제 파악, 요소 분석 능력 (1-5점)
+    2. 분석적 사고: 정보 비교, 논리적 판단 능력 (1-5점)
+    3. 대안발견 및 기획: 창의적 해결방안, 실행계획 수립 (1-5점)
+    4. 의사소통: 명확한 표현, 건설적 토론 능력 (1-5점)
+    
+    각 영역별 점수와 개선 제안을 JSON 형식으로 제공해주세요.
+    
+    성찰 내용: {reflection_text}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=800
+        )
+        
+        result = response.choices[0].message.content.strip()
+        try:
+            return json.loads(result)
+        except:
+            return {"assessment": result}
+    except Exception as e:
+        return {"error": f"평가 실패: {e}"}
 
 def translate_to_korean(text: str) -> str:
     """영문 텍스트를 한국어로 번역"""
@@ -116,13 +223,43 @@ def gpt_feedback(korean_text: str) -> str:
     except Exception as e:
         return f"⚠️ GPT 호출 오류: {e}"
 
-def create_docx_content(text: str) -> bytes:
+def create_comparison_chart(analysis1: dict, analysis2: dict) -> None:
+    """논조 비교 차트 생성 - streamlit 기본 차트 사용"""
+    if "error" in analysis1 or "error" in analysis2:
+        st.error("논조 분석 데이터가 부족하여 차트를 생성할 수 없습니다.")
+        return
+    
+    try:
+        # 신뢰도 데이터 추출 시도
+        score1 = analysis1.get('신뢰도_점수', 5)
+        score2 = analysis2.get('신뢰도_점수', 5)
+        
+        df = pd.DataFrame({
+            '기사': ['기사 1', '기사 2'],
+            '신뢰도': [score1, score2]
+        })
+        
+        st.subheader("기사별 신뢰도 비교")
+        st.bar_chart(df.set_index('기사'))
+        
+    except:
+        st.info("신뢰도 데이터를 차트로 표시할 수 없습니다.")
+
+def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
     """텍스트를 DOCX 파일로 변환하여 바이트 데이터 반환"""
     doc = Document()
     doc.add_heading('News Comparison Analysis', 0)
     doc.add_paragraph(f"작성일: {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}")
     doc.add_paragraph("")
     
+    # 분석 결과 추가
+    if analysis_data:
+        doc.add_heading('분석 요약', level=1)
+        for key, value in analysis_data.items():
+            doc.add_paragraph(f"{key}: {value}")
+        doc.add_paragraph("")
+    
+    doc.add_heading('작성된 설명문', level=1)
     for line in text.splitlines():
         if line.strip():
             doc.add_paragraph(line)
@@ -147,7 +284,11 @@ if "stage" not in st.session_state:
         "article1": "", "article2": "",
         "summary1": "", "summary2": "",
         "summary1_kr": "", "summary2_kr": "",
+        "tone_analysis1": {}, "tone_analysis2": {},
         "draft": "", "feedback": "", "feedback_kr": "",
+        "writing_evaluation": {},
+        "problem_solving_score": {},
+        "reflection_log": [],
         "final_text": ""
     })
 
@@ -158,12 +299,12 @@ if not OPENAI_OK:
     st.warning("⚠️ OpenAI API 키가 설정되지 않았거나 문제가 있습니다. 요약 및 피드백 기능이 비활성화됩니다.")
 
 # ───── 진행 상태 표시 ─────
-progress_stages = ["input", "draft", "feedback", "final"]
+progress_stages = ["input", "analysis", "draft", "feedback", "final"]
 current_stage_idx = progress_stages.index(st.session_state.stage)
 progress = (current_stage_idx + 1) / len(progress_stages)
 
 st.progress(progress)
-stage_names = ["기사 입력", "초안 작성", "AI 피드백", "최종 완성"]
+stage_names = ["기사 입력", "논조 분석", "초안 작성", "AI 피드백", "최종 완성"]
 st.caption(f"현재 단계: {stage_names[current_stage_idx]} ({current_stage_idx + 1}/{len(progress_stages)})")
 
 # ───── 단계별 화면 구성 ─────
@@ -174,8 +315,10 @@ if st.session_state.stage == "input":
     
     col1, col2 = st.columns(2)
     
+    # 기사 1 입력 필드와 오류 메시지 placeholder
     with col1:
         st.markdown("**기사 1 본문**")
+        error_placeholder1 = st.empty()
         article1 = st.text_area(
             "첫 번째 기사의 본문을 입력하세요",
             value=st.session_state.get("article1", ""),
@@ -183,8 +326,10 @@ if st.session_state.stage == "input":
             key="article1_input"
         )
     
+    # 기사 2 입력 필드와 오류 메시지 placeholder
     with col2:
         st.markdown("**기사 2 본문**")
+        error_placeholder2 = st.empty()
         article2 = st.text_area(
             "두 번째 기사의 본문을 입력하세요",
             value=st.session_state.get("article2", ""),
@@ -196,49 +341,137 @@ if st.session_state.stage == "input":
     
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn2:
-        if st.button("다음 단계 → (요약 및 번역 생성)", type="primary", use_container_width=True):
-            if not article1.strip() or not article2.strip():
-                st.error("두 기사 본문을 모두 입력해주세요.")
+        overall_error_placeholder = st.empty()
+        if st.button("다음 단계 → (분석 시작)", type="primary", use_container_width=True):
+            # 개별 필드별 유효성 검사
+            is_valid = True
+            if not article1.strip():
+                error_placeholder1.error("기사 1 본문을 입력해주세요.")
+                is_valid = False
             else:
+                error_placeholder1.empty()
+
+            if not article2.strip():
+                error_placeholder2.error("기사 2 본문을 입력해주세요.")
+                is_valid = False
+            else:
+                error_placeholder2.empty()
+
+            # 전체 유효성 검사
+            if is_valid:
+                overall_error_placeholder.empty()
                 st.session_state.article1 = article1
                 st.session_state.article2 = article2
-                
-                # 요약 및 번역 생성
-                with st.spinner("기사 요약 및 번역을 생성하고 있습니다... 잠시만 기다려주세요."):
-                    # 영어 요약 생성
-                    st.session_state.summary1 = summarize_text(article1)
-                    st.session_state.summary2 = summarize_text(article2)
-                    
-                    # 한국어 번역 생성
-                    st.session_state.summary1_kr = translate_to_korean(st.session_state.summary1)
-                    st.session_state.summary2_kr = translate_to_korean(st.session_state.summary2)
-                
+                st.session_state.stage = "analysis"
+                st.rerun()
+            else:
+                overall_error_placeholder.error("모든 필수 입력 필드를 채워주세요.")
+
+# 2단계: 논조 분석 (새로 추가)
+elif st.session_state.stage == "analysis":
+    st.subheader("② 논조 분석 및 요약")
+    
+    if not st.session_state.get("summary1"):
+        with st.spinner("기사 분석 및 요약을 생성하고 있습니다... 잠시만 기다려주세요."):
+            # 영어 요약 생성
+            st.session_state.summary1 = summarize_text(st.session_state.article1)
+            st.session_state.summary2 = summarize_text(st.session_state.article2)
+            
+            # 논조 분석 생성
+            st.session_state.tone_analysis1 = analyze_tone_and_stance(st.session_state.article1)
+            st.session_state.tone_analysis2 = analyze_tone_and_stance(st.session_state.article2)
+            
+            # 한국어 번역 생성
+            st.session_state.summary1_kr = translate_to_korean(st.session_state.summary1)
+            st.session_state.summary2_kr = translate_to_korean(st.session_state.summary2)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("#### 🗞️ 기사 1 분석")
+        with st.expander("요약 (영어/한국어)", expanded=True):
+            st.info(f"**[English]**\n{st.session_state.summary1}")
+            st.success(f"**[한국어]**\n{st.session_state.summary1_kr}")
+        
+        with st.expander("논조 분석", expanded=True):
+            if "error" not in st.session_state.tone_analysis1:
+                st.json(st.session_state.tone_analysis1)
+            else:
+                st.error(st.session_state.tone_analysis1["error"])
+    
+    with col2:
+        st.markdown("#### 🗞️ 기사 2 분석")
+        with st.expander("요약 (영어/한국어)", expanded=True):
+            st.info(f"**[English]**\n{st.session_state.summary2}")
+            st.success(f"**[한국어]**\n{st.session_state.summary2_kr}")
+        
+        with st.expander("논조 분석", expanded=True):
+            if "error" not in st.session_state.tone_analysis2:
+                st.json(st.session_state.tone_analysis2)
+            else:
+                st.error(st.session_state.tone_analysis2["error"])
+    
+    # 비교 차트 표시
+    st.markdown("#### 📊 논조 비교")
+    create_comparison_chart(st.session_state.tone_analysis1, st.session_state.tone_analysis2)
+    
+    # 성찰 질문 추가
+    st.markdown("#### 🤔 분석 성찰")
+    reflection_error_placeholder = st.empty()
+    reflection = st.text_area(
+        "두 기사의 차이점과 공통점, 그리고 각각의 논조에 대한 당신의 생각을 적어보세요:",
+        height=100,
+        key="analysis_reflection"
+    )
+    
+    col_btn1, col_btn2 = st.columns([1, 1])
+    with col_btn1:
+        if st.button("← 이전 단계", use_container_width=True):
+            st.session_state.stage = "input"
+            st.rerun()
+    
+    with col_btn2:
+        if st.button("초안 작성 단계로 →", type="primary", use_container_width=True):
+            if not reflection.strip():
+                reflection_error_placeholder.error("분석 성찰 내용을 입력해주세요.")
+            else:
+                reflection_error_placeholder.empty()
+                st.session_state.reflection_log.append({
+                    "stage": "analysis",
+                    "content": reflection,
+                    "timestamp": datetime.datetime.now()
+                })
                 st.session_state.stage = "draft"
                 st.rerun()
 
-# 2단계: 초안 작성
+# 3단계: 초안 작성 (기존과 동일하지만 성찰 추가)
 elif st.session_state.stage == "draft":
-    st.subheader("② 비교 설명문 초안 작성 (문단별 구성 + AI 힌트 지원)")
+    st.subheader("③ 비교 설명문 초안 작성")
 
     def paragraph_input_with_guide(title, key, guide_title, guide_lines, summary_text=None, hint_key=None, hint_prompt=None):
         col1, col2 = st.columns([2, 1])
         with col1:
             st.subheader(title)
-            # st.session_state에 해당 키가 없으면 초기화
             if key not in st.session_state:
                 st.session_state[key] = ""
+            
+            # 각 문단별 오류 메시지 placeholder 생성
+            error_key = f"{key}_error_placeholder"
+            if error_key not in st.session_state:
+                st.session_state[error_key] = st.empty()
+            
             user_input = st.text_area("", key=key, height=160)
+            
+            # 실시간 유효성 검사는 여기서 하지 않고, 버튼 클릭시에만 실행
         
         with col2:
             st.markdown(f"#### 🧭 {guide_title}")
             for line in guide_lines:
                 st.markdown(f"- {line}")
             
-            # 관련 기사 요약 (영문/한글) 표시
             if summary_text:
-                st.markdown("#### 🗞️ 관련 기사 요약 (영문/한글)")
+                st.markdown("#### 🗞️ 관련 기사 요약")
                 summary_en = summary_text
-                # summary_text가 summary1인지 summary2인지 확인하여 해당하는 한글 번역본을 찾음
                 summary_kr_key = "summary1_kr" if summary_en == st.session_state.get("summary1") else "summary2_kr"
                 summary_kr = st.session_state.get(summary_kr_key, "번역 없음")
                 
@@ -246,7 +479,6 @@ elif st.session_state.stage == "draft":
                     st.info(f"**[English]**\n{summary_en}")
                     st.success(f"**[한국어]**\n{summary_kr}")
 
-            # AI 힌트 버튼
             if hint_key and hint_prompt and OPENAI_OK:
                 if f"{hint_key}_hint" not in st.session_state:
                     st.session_state[f"{hint_key}_hint"] = ""
@@ -332,20 +564,42 @@ elif st.session_state.stage == "draft":
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
         if st.button("← 이전 단계", use_container_width=True):
-            st.session_state.stage = "input"
+            st.session_state.stage = "analysis"
             st.rerun()
 
     with col_btn2:
+        overall_draft_error = st.empty()
         if st.button("AI 피드백 받기 →", type="primary", use_container_width=True):
-            if not all([intro.strip(), body1.strip(), body2.strip(), compare.strip(), conclusion.strip()]):
-                st.error("모든 문단을 작성해주세요.")
-            else:
+            # 각 문단별 유효성 검사
+            paragraphs = [
+                (intro, "intro_input", "서론"),
+                (body1, "body1_input", "본론 1"),
+                (body2, "body2_input", "본론 2"),
+                (compare, "compare_input", "비교 분석"),
+                (conclusion, "conclusion_input", "결론")
+            ]
+            
+            is_valid = True
+            for content, key, title in paragraphs:
+                error_key = f"{key}_error_placeholder"
+                if not content.strip():
+                    if error_key in st.session_state:
+                        st.session_state[error_key].error(f"{title} 부분을 작성해주세요.")
+                    is_valid = False
+                else:
+                    if error_key in st.session_state:
+                        st.session_state[error_key].empty()
+            
+            if is_valid:
+                overall_draft_error.empty()
                 st.session_state.stage = "feedback"
                 st.rerun()
+            else:
+                overall_draft_error.error("모든 문단을 작성해주세요.")
 
-# 3단계: AI 피드백 (한국어 번역 추가)
+# 4단계: AI 피드백 (루브릭 평가 추가)
 elif st.session_state.stage == "feedback":
-    st.subheader("③ GPT-4o 피드백 (영어 + 한국어 번역)")
+    st.subheader("④ AI 피드백 및 루브릭 평가")
     
     col1, col2 = st.columns(2)
     
@@ -360,47 +614,64 @@ elif st.session_state.stage == "feedback":
         )
     
     with col2:
-        st.markdown("**AI 피드백**")
+        st.markdown("**AI 피드백 및 평가**")
         
-        # 영어 피드백 생성
+        # 기존 피드백 + 새로운 루브릭 평가
         if "feedback" not in st.session_state or not st.session_state.feedback:
             if OPENAI_OK:
-                with st.spinner("AI 피드백을 생성하고 있습니다..."):
+                with st.spinner("AI 피드백 및 평가를 생성하고 있습니다..."):
+                    # 기존 피드백
                     feedback = gpt_feedback(st.session_state.draft)
                     st.session_state.feedback = feedback
                     
-                    # 피드백 한국어 번역도 함께 생성
+                    # 영어 표현 능력 루브릭 평가
+                    english_draft = translate_to_english(st.session_state.draft)
+                    st.session_state.writing_evaluation = evaluate_writing_rubric(english_draft)
+                    
+                    # 피드백 한국어 번역
                     if feedback and "⚠️" not in feedback:
-                        with st.spinner("피드백을 한국어로 번역하고 있습니다..."):
-                            st.session_state.feedback_kr = translate_to_korean(feedback)
+                        st.session_state.feedback_kr = translate_to_korean(feedback)
                     else:
                         st.session_state.feedback_kr = "번역 불가"
             else:
-                st.session_state.feedback = "⚠️ GPT 피드백 기능이 비활성화되어 있습니다."
-                st.session_state.feedback_kr = "⚠️ GPT 피드백 기능이 비활성화되어 있습니다."
+                st.session_state.feedback = "⚠️ AI 피드백 기능이 비활성화되어 있습니다."
+                st.session_state.feedback_kr = "⚠️ AI 피드백 기능이 비활성화되어 있습니다."
         
-        # 탭으로 영어/한국어 피드백 표시
-        tab1, tab2 = st.tabs(["🇺🇸 English", "🇰🇷 한국어"])
+        # 탭으로 구분하여 표시
+        tab1, tab2, tab3 = st.tabs(["🇺🇸 English Feedback", "🇰🇷 한국어 피드백", "📊 루브릭 평가"])
         
         with tab1:
             st.text_area(
-                "GPT-4o 피드백 (영어)",
+                "AI 피드백 (영어)",
                 value=st.session_state.feedback,
-                height=350,
-                disabled=True,
-                key="feedback_en_display"
+                height=300,
+                disabled=True
             )
         
         with tab2:
             st.text_area(
-                "GPT-4o 피드백 (한국어)",
+                "AI 피드백 (한국어)",
                 value=st.session_state.get("feedback_kr", "번역 중..."),
-                height=350,
-                disabled=True,
-                key="feedback_kr_display"
+                height=300,
+                disabled=True
             )
+        
+        with tab3:
+            st.markdown("#### 📋 영어 표현 능력 평가")
+            if "error" not in st.session_state.writing_evaluation:
+                st.json(st.session_state.writing_evaluation)
+            else:
+                st.error(st.session_state.writing_evaluation.get("error", "평가 오류"))
     
+    # 성찰 영역 추가
     st.markdown("---")
+    st.markdown("#### 🤔 피드백 성찰")
+    feedback_reflection_error = st.empty()
+    feedback_reflection = st.text_area(
+        "AI 피드백을 받은 후 느낀 점과 개선하고 싶은 부분을 적어보세요:",
+        height=100,
+        key="feedback_reflection"
+    )
     
     col_btn1, col_btn2 = st.columns([1, 1])
     with col_btn1:
@@ -410,18 +681,28 @@ elif st.session_state.stage == "feedback":
     
     with col_btn2:
         if st.button("최종 수정 단계로 →", type="primary", use_container_width=True):
-            st.session_state.stage = "final"
-            st.rerun()
+            if not feedback_reflection.strip():
+                feedback_reflection_error.error("피드백 성찰 내용을 입력해주세요.")
+            else:
+                feedback_reflection_error.empty()
+                st.session_state.reflection_log.append({
+                    "stage": "feedback",
+                    "content": feedback_reflection,
+                    "timestamp": datetime.datetime.now()
+                })
+                # 문제해결 역량 평가
+                st.session_state.problem_solving_score = assess_problem_solving(feedback_reflection)
+                st.session_state.stage = "final"
+                st.rerun()
 
-# 4단계: 최종 완성
+# 5단계: 최종 완성 (종합 평가 추가)
 elif st.session_state.stage == "final":
-    st.subheader("④ 최종 수정 및 완성")
+    st.subheader("⑤ 최종 수정 및 완성")
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
         st.markdown("**최종 수정**")
-        # final_text가 비어있으면 draft 내용으로 초기화
         if "final_text" not in st.session_state or not st.session_state.final_text:
              st.session_state.final_text = st.session_state.draft
              
@@ -435,16 +716,23 @@ elif st.session_state.stage == "final":
         st.session_state.final_text = final_text
     
     with col2:
-        st.markdown("**AI 피드백 참고**")
+        st.markdown("**종합 평가 결과**")
         
-        # 탭으로 영어/한국어 피드백 표시
-        tab1, tab2 = st.tabs(["🇺🇸 English", "🇰🇷 한국어"])
+        # 문제해결 역량 평가 결과
+        if st.session_state.problem_solving_score:
+            with st.expander("🧠 문제해결 역량 평가", expanded=True):
+                if "error" not in st.session_state.problem_solving_score:
+                    st.json(st.session_state.problem_solving_score)
+                else:
+                    st.error(st.session_state.problem_solving_score["error"])
         
-        with tab1:
-            st.info(st.session_state.feedback)
-        
-        with tab2:
-            st.info(st.session_state.get("feedback_kr", "번역 없음"))
+        # 영어 표현 능력 평가 결과
+        if st.session_state.writing_evaluation:
+            with st.expander("✍️ 영어 표현 능력 평가", expanded=True):
+                if "error" not in st.session_state.writing_evaluation:
+                    st.json(st.session_state.writing_evaluation)
+                else:
+                    st.error(st.session_state.writing_evaluation["error"])
     
     st.markdown("---")
     
@@ -457,12 +745,18 @@ elif st.session_state.stage == "final":
             st.rerun()
 
     with col_btn2:
-        # 다운로드 버튼
-        docx_data = create_docx_content(final_text)
+        # 개선된 다운로드 (분석 데이터 포함)
+        analysis_summary = {
+            "논조분석1": st.session_state.tone_analysis1,
+            "논조분석2": st.session_state.tone_analysis2,
+            "영어표현평가": st.session_state.writing_evaluation,
+            "문제해결평가": st.session_state.problem_solving_score
+        }
+        docx_data = create_docx_content(final_text, analysis_summary)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"news_comparison_{timestamp}.docx"
+        filename = f"news_comparison_complete_{timestamp}.docx"
         st.download_button(
-            label="DOCX 다운로드",
+            label="📄 종합 보고서 다운로드",
             data=docx_data,
             file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -473,17 +767,8 @@ elif st.session_state.stage == "final":
     with col_btn4:
         if st.button("처음부터 다시", use_container_width=True):
             # 세션 상태 초기화
-            keys_to_reset = [
-                "article1", "article2", "summary1", "summary2", 
-                "summary1_kr", "summary2_kr",
-                "draft", "feedback", "feedback_kr", "final_text", "stage",
-                "intro_input", "body1_input", "body2_input", 
-                "compare_input", "conclusion_input",
-                "intro_hint", "body1_hint", "body2_hint", 
-                "compare_hint", "conclusion_hint"
-            ]
-            for key in keys_to_reset:
-                if key in st.session_state:
+            for key in list(st.session_state.keys()):
+                if key != 'stage':
                     st.session_state.pop(key)
             st.session_state.stage = "input"
             st.rerun()
@@ -492,15 +777,25 @@ elif st.session_state.stage == "final":
     if final_text.strip():
         st.markdown("### 📋 완성된 작문 미리보기")
         st.success(final_text)
+        
+        # 학습 성찰 로그 표시
+        if st.session_state.reflection_log:
+            with st.expander("📝 학습 성찰 기록", expanded=False):
+                for idx, log in enumerate(st.session_state.reflection_log):
+                    st.markdown(f"**{log['stage']} 단계 성찰:**")
+                    st.write(log['content'])
+                    st.caption(f"작성 시간: {log['timestamp']}")
+                    st.markdown("---")
 
 # ───── 사이드바 정보 ─────
 with st.sidebar:
     st.markdown("### 📝 사용 방법")
     st.markdown("""
     1. **기사 입력**: 비교할 두 기사의 본문을 입력
-    2. **초안 작성**: AI가 생성한 요약/번역을 참고하여 문단별로 비교 설명문 작성 (AI 힌트 지원)
-    3. **AI 피드백**: GPT-4o가 작문에 대한 상세한 피드백 제공 (영어 + 한국어 번역)
-    4. **최종 완성**: 피드백을 반영하여 수정 후 DOCX 파일로 다운로드
+    2. **논조 분석**: AI가 각 기사의 논조와 입장을 분석
+    3. **초안 작성**: 분석 결과를 참고하여 비교 설명문 작성
+    4. **AI 피드백**: 종합적인 피드백과 루브릭 평가 제공
+    5. **최종 완성**: 피드백을 반영한 수정 후 종합 보고서 다운로드
     """)
     
     st.markdown("### ⚙️ 설정 상태")
@@ -512,15 +807,16 @@ with st.sidebar:
     st.markdown("### 📊 진행 상황")
     st.markdown(f"현재 단계: **{stage_names[current_stage_idx]}**")
     
-    if st.session_state.get("article1") and st.session_state.get("article2"):
-        st.markdown("✅ 기사 입력 완료")
-    if st.session_state.get("summary1_kr") and st.session_state.get("summary2_kr"):
-        st.markdown("✅ 요약/번역 완료")
-    if st.session_state.get("draft"):
-        st.markdown("✅ 초안 작성 완료")
-    if st.session_state.get("feedback"):
-        st.markdown("✅ AI 피드백 완료")
-    if st.session_state.get("feedback_kr"):
-        st.markdown("✅ 피드백 번역 완료")
-    if st.session_state.get("final_text"):
-        st.markdown("✅ 최종 수정 완료")
+    # 진행 상황 체크리스트
+    checklist_items = [
+        ("기사 입력", bool(st.session_state.get("article1") and st.session_state.get("article2"))),
+        ("논조 분석", bool(st.session_state.get("tone_analysis1") and st.session_state.get("tone_analysis2"))),
+        ("초안 작성", bool(st.session_state.get("draft"))),
+        ("AI 피드백", bool(st.session_state.get("feedback"))),
+        ("루브릭 평가", bool(st.session_state.get("writing_evaluation"))),
+        ("최종 완성", bool(st.session_state.get("final_text")))
+    ]
+    
+    for item, completed in checklist_items:
+        icon = "✅" if completed else "⏳"
+        st.markdown(f"{icon} {item}")
