@@ -88,39 +88,38 @@ def analyze_tone_and_stance(text: str) -> dict:
         return {"error": f"분석 실패: {e}"}
 
 def display_emotional_words(analysis1: dict, analysis2: dict) -> None:
-    """감정적 언어 시각화 - 워드클라우드 대안"""
+    """감정적 언어 시각화"""
+    st.markdown("#### 🔤 감정적 표현 비교")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("#### 🔤 기사 1 - 감정적 표현")
-        if "감정적언어" in analysis1:
+        st.markdown("**기사 1**")
+        if "감정적언어" in analysis1 and analysis1["감정적언어"]:
             words = analysis1["감정적언어"]
-            if words:
-                word_html = ""
-                for i, word in enumerate(words):
-                    size = 20 - i*2
-                    color = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4", "#feca57"][i % 5]
-                    word_html += f'<span style="font-size:{size}px; color:{color}; margin:5px; font-weight:bold;">{word}</span> '
-                
-                st.markdown(f'<div style="line-height:2;">{word_html}</div>', unsafe_allow_html=True)
-            else:
-                st.info("감정적 표현이 감지되지 않았습니다.")
+            word_html = ""
+            for i, word in enumerate(words):
+                size = 20 - i*2
+                color = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4", "#feca57"][i % 5]
+                word_html += f'<span style="font-size:{size}px; color:{color}; margin:5px; font-weight:bold;">{word}</span> '
+            
+            st.markdown(f'<div style="line-height:2;">{word_html}</div>', unsafe_allow_html=True)
+        else:
+            st.info("감정적 표현이 감지되지 않았습니다.")
     
     with col2:
-        st.markdown("#### 🔤 기사 2 - 감정적 표현")
-        if "감정적언어" in analysis2:
+        st.markdown("**기사 2**")
+        if "감정적언어" in analysis2 and analysis2["감정적언어"]:
             words = analysis2["감정적언어"]
-            if words:
-                word_html = ""
-                for i, word in enumerate(words):
-                    size = 20 - i*2
-                    color = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4", "#feca57"][i % 5]
-                    word_html += f'<span style="font-size:{size}px; color:{color}; margin:5px; font-weight:bold;">{word}</span> '
-                
-                st.markdown(f'<div style="line-height:2;">{word_html}</div>', unsafe_allow_html=True)
-            else:
-                st.info("감정적 표현이 감지되지 않았습니다.")
+            word_html = ""
+            for i, word in enumerate(words):
+                size = 20 - i*2
+                color = ["#ff6b6b", "#4ecdc4", "#45b7d1", "#96ceb4", "#feca57"][i % 5]
+                word_html += f'<span style="font-size:{size}px; color:{color}; margin:5px; font-weight:bold;">{word}</span> '
+            
+            st.markdown(f'<div style="line-height:2;">{word_html}</div>', unsafe_allow_html=True)
+        else:
+            st.info("감정적 표현이 감지되지 않았습니다.")
 
 def create_simple_gauge(value: int, title: str) -> None:
     """간단한 게이지 시각화"""
@@ -128,22 +127,28 @@ def create_simple_gauge(value: int, title: str) -> None:
     
     if value <= -2:
         color = "#ff4757"
+        emoji = "😞"
     elif value <= -1:
         color = "#ffa502"
+        emoji = "😕"
     elif value == 0:
         color = "#747d8c"
+        emoji = "😐"
     elif value <= 1:
         color = "#2ed573"
+        emoji = "🙂"
     else:
         color = "#5352ed"
+        emoji = "😊"
     
     gauge_html = f"""
-    <div style="text-align: center; margin: 10px;">
-        <h4>{title}</h4>
-        <div style="width: 200px; height: 20px; background-color: #e1e8ed; border-radius: 10px; margin: 0 auto;">
+    <div style="text-align: center; margin: 20px; padding: 20px; border-radius: 10px; background-color: #f8f9fa;">
+        <h4 style="margin-bottom: 15px;">{title}</h4>
+        <div style="font-size: 30px; margin-bottom: 10px;">{emoji}</div>
+        <div style="width: 200px; height: 20px; background-color: #e1e8ed; border-radius: 10px; margin: 0 auto; position: relative;">
             <div style="width: {percentage}%; height: 100%; background-color: {color}; border-radius: 10px;"></div>
         </div>
-        <p style="margin-top: 5px; font-weight: bold; color: {color};">{value}점</p>
+        <p style="margin-top: 10px; font-weight: bold; color: {color}; font-size: 18px;">{value}점</p>
     </div>
     """
     st.markdown(gauge_html, unsafe_allow_html=True)
@@ -154,32 +159,72 @@ def create_enhanced_comparison_chart(analysis1: dict, analysis2: dict) -> None:
         st.error("논조 분석 데이터가 부족하여 차트를 생성할 수 없습니다.")
         return
     
+    st.markdown("#### 📊 논조 점수 비교")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        create_simple_gauge(analysis1.get('논조점수', 0), "기사 1 논조")
+    with col2:
+        create_simple_gauge(analysis2.get('논조점수', 0), "기사 2 논조")
+    
+    # 신뢰도 & 객관성 차트
+    st.markdown("#### 📈 신뢰도 & 객관성")
+    
+    trust1 = analysis1.get('신뢰도점수', 5)
+    trust2 = analysis2.get('신뢰도점수', 5)
+    obj1 = analysis1.get('객관성점수', 5)
+    obj2 = analysis2.get('객관성점수', 5)
+    
+    metrics_df = pd.DataFrame({
+        '지표': ['신뢰도', '객관성'],
+        '기사1': [trust1, obj1],
+        '기사2': [trust2, obj2]
+    })
+    st.bar_chart(metrics_df.set_index('지표'))
+
+def gpt_feedback(korean_text: str) -> str:
+    """한국어 작문에 대한 한국어 피드백 제공"""
+    if not OPENAI_OK or client is None:
+        return "⚠️ GPT 사용을 위한 OpenAI API 키가 설정되지 않았거나 문제가 있습니다."
+    if not korean_text.strip():
+        return "⚠️ 피드백할 텍스트가 없습니다."
+
+    prompt = f"""
+    당신은 한국인 학습자를 위한 글쓰기 지도교사입니다. 다음 비교 설명문을 평가하고 건설적인 피드백을 한국어로 제공하세요.
+
+    다음 루브릭 기준으로 평가해주세요:
+
+    **1. 내용 논리성 (Content Logic)** 
+    - 주장의 명확성, 근거 제시 충분성, 논리적 연결, 문제 상황 분석 깊이
+
+    **2. 구성 체계성 (Organization)**
+    - 서론-본론-결론 구조, 문단 간 연결과 흐름, 응집성과 일관성
+
+    **3. 문법·어휘 정확성 (Language Accuracy)**
+    - 문법적 정확성, 문장 구조의 다양성, 어휘 선택의 적절성
+
+    각 영역별로 구체적인 피드백과 3-5개의 개선 제안을 제공해주세요.
+
+    평가 대상 글:
+    {korean_text}
+    """
+
     try:
-        # 논조 게이지 차트
-        st.markdown("#### 📊 논조 점수 비교")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            create_simple_gauge(analysis1.get('논조점수', 0), "기사 1 논조")
-        with col2:
-            create_simple_gauge(analysis2.get('논조점수', 0), "기사 2 논조")
-        
-        # 신뢰도 & 객관성 차트
-        trust1 = analysis1.get('신뢰도점수', 5)
-        trust2 = analysis2.get('신뢰도점수', 5)
-        obj1 = analysis1.get('객관성점수', 5)
-        obj2 = analysis2.get('객관성점수', 5)
-        
-        metrics_df = pd.DataFrame({
-            '지표': ['신뢰도', '객관성'],
-            '기사1': [trust1, obj1],
-            '기사2': [trust2, obj2]
-        })
-        st.subheader("📈 신뢰도 & 객관성")
-        st.bar_chart(metrics_df.set_index('지표'))
-        
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "당신은 글쓰기 지도교사입니다."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.2,
+            max_tokens=1200
+        )
+        return response.choices[0].message.content.strip()
+    except APIError as e:
+        return f"⚠️ OpenAI API 오류: {e}"
     except Exception as e:
-        st.error(f"차트 생성 실패: {e}")
+        return f"⚠️ GPT 호출 오류: {e}"
 
 def evaluate_writing_rubric(text: str) -> dict:
     """영어 표현 능력 루브릭 평가 - 구체적 기준 적용"""
@@ -321,49 +366,6 @@ def translate_to_english(text: str) -> str:
     except Exception as e:
         return f"번역 실패: {e}"
 
-def gpt_feedback(korean_text: str) -> str:
-    """한국어 작문에 대한 한국어 피드백 제공"""
-    if not OPENAI_OK or client is None:
-        return "⚠️ GPT 사용을 위한 OpenAI API 키가 설정되지 않았거나 문제가 있습니다."
-    if not korean_text.strip():
-        return "⚠️ 피드백할 텍스트가 없습니다."
-
-    prompt = f"""
-    당신은 한국인 학습자를 위한 글쓰기 지도교사입니다. 다음 비교 설명문을 평가하고 건설적인 피드백을 한국어로 제공하세요.
-
-    다음 루브릭 기준으로 평가해주세요:
-
-    **1. 내용 논리성 (Content Logic)** 
-    - 주장의 명확성, 근거 제시 충분성, 논리적 연결, 문제 상황 분석 깊이
-
-    **2. 구성 체계성 (Organization)**
-    - 서론-본론-결론 구조, 문단 간 연결과 흐름, 응집성과 일관성
-
-    **3. 문법·어휘 정확성 (Language Accuracy)**
-    - 문법적 정확성, 문장 구조의 다양성, 어휘 선택의 적절성
-
-    각 영역별로 구체적인 피드백과 3-5개의 개선 제안을 제공해주세요.
-
-    평가 대상 글:
-    {korean_text}
-    """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "당신은 글쓰기 지도교사입니다."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=1200
-        )
-        return response.choices[0].message.content.strip()
-    except APIError as e:
-        return f"⚠️ OpenAI API 오류: {e}"
-    except Exception as e:
-        return f"⚠️ GPT 호출 오류: {e}"
-
 def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
     """텍스트를 DOCX 파일로 변환하여 바이트 데이터 반환"""
     doc = Document()
@@ -402,7 +404,7 @@ if "stage" not in st.session_state:
         "summary1": "", "summary2": "",
         "summary1_kr": "", "summary2_kr": "",
         "tone_analysis1": {}, "tone_analysis2": {},
-        "draft": "", "feedback": "", "feedback_kr": "",
+        "draft": "", "feedback": "",
         "writing_evaluation": {},
         "problem_solving_score": {},
         "reflection_log": [],
@@ -480,7 +482,7 @@ if st.session_state.stage == "input":
             else:
                 overall_error_placeholder.error("모든 필수 입력 필드를 채워주세요.")
 
-# 2단계: 논조 분석 (시각화 추가)
+# 2단계: 논조 분석 및 시각화
 elif st.session_state.stage == "analysis":
     st.subheader("② 논조 분석 및 요약")
     
@@ -559,7 +561,7 @@ elif st.session_state.stage == "analysis":
                 st.session_state.stage = "draft"
                 st.rerun()
 
-# 3단계: 초안 작성 (기존과 동일)
+# 3단계: 초안 작성
 elif st.session_state.stage == "draft":
     st.subheader("③ 비교 설명문 초안 작성")
 
@@ -707,7 +709,7 @@ elif st.session_state.stage == "draft":
             else:
                 overall_draft_error.error("모든 문단을 작성해주세요.")
 
-# 4단계: AI 피드백
+# 4단계: AI 피드백 (한국어 전용)
 elif st.session_state.stage == "feedback":
     st.subheader("④ AI 피드백 및 루브릭 평가")
     
@@ -746,16 +748,16 @@ elif st.session_state.stage == "feedback":
             st.text_area(
                 "AI 피드백",
                 value=st.session_state.feedback,
-                height=300,
+                height=350,
                 disabled=True
             )
         
         with tab2:
             st.markdown("#### 📋 영어 표현 능력 평가")
-            if "error" not in st.session_state.writing_evaluation:
+            if st.session_state.writing_evaluation and "error" not in st.session_state.writing_evaluation:
                 st.json(st.session_state.writing_evaluation)
             else:
-                st.error(st.session_state.writing_evaluation.get("error", "평가 오류"))
+                st.error(st.session_state.writing_evaluation.get("error", "평가 오류") if st.session_state.writing_evaluation else "평가 데이터 없음")
     
     st.markdown("---")
     st.markdown("#### 🤔 피드백 성찰")
@@ -783,6 +785,7 @@ elif st.session_state.stage == "feedback":
                     "content": feedback_reflection,
                     "timestamp": datetime.datetime.now()
                 })
+                # 문제해결 역량 평가 수행
                 st.session_state.problem_solving_score = assess_problem_solving(feedback_reflection)
                 st.session_state.stage = "final"
                 st.rerun()
@@ -810,6 +813,7 @@ elif st.session_state.stage == "final":
     with col2:
         st.markdown("**종합 평가 결과**")
         
+        # 문제해결 역량 평가 결과
         if st.session_state.problem_solving_score:
             with st.expander("🧠 문제해결 역량 평가", expanded=True):
                 if "error" not in st.session_state.problem_solving_score:
@@ -817,6 +821,7 @@ elif st.session_state.stage == "final":
                 else:
                     st.error(st.session_state.problem_solving_score["error"])
         
+        # 영어 표현 능력 평가 결과
         if st.session_state.writing_evaluation:
             with st.expander("✍️ 영어 표현 능력 평가", expanded=True):
                 if "error" not in st.session_state.writing_evaluation:
@@ -834,6 +839,7 @@ elif st.session_state.stage == "final":
             st.rerun()
 
     with col_btn2:
+        # 종합 보고서 다운로드
         analysis_summary = {
             "논조분석1": st.session_state.tone_analysis1,
             "논조분석2": st.session_state.tone_analysis2,
@@ -854,16 +860,19 @@ elif st.session_state.stage == "final":
 
     with col_btn4:
         if st.button("처음부터 다시", use_container_width=True):
+            # 세션 상태 초기화
             for key in list(st.session_state.keys()):
                 if key != 'stage':
                     st.session_state.pop(key)
             st.session_state.stage = "input"
             st.rerun()
     
+    # 완성된 작문 미리보기
     if final_text.strip():
         st.markdown("### 📋 완성된 작문 미리보기")
         st.success(final_text)
         
+        # 학습 성찰 로그 표시
         if st.session_state.reflection_log:
             with st.expander("📝 학습 성찰 기록", expanded=False):
                 for idx, log in enumerate(st.session_state.reflection_log):
@@ -892,6 +901,7 @@ with st.sidebar:
     st.markdown("### 📊 진행 상황")
     st.markdown(f"현재 단계: **{stage_names[current_stage_idx]}**")
     
+    # 진행 상황 체크리스트
     checklist_items = [
         ("기사 입력", bool(st.session_state.get("article1") and st.session_state.get("article2"))),
         ("논조 분석", bool(st.session_state.get("tone_analysis1") and st.session_state.get("tone_analysis2"))),
