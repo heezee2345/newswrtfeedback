@@ -6,6 +6,7 @@ from docx import Document
 import tempfile
 import json
 import pandas as pd
+import re
 
 # ───── 환경 설정 ─────
 try:
@@ -23,7 +24,109 @@ if OPENAI_OK:
         st.error(f"OpenAI 초기화 실패: {e}")
         OPENAI_OK = False
 
-# ───── 유틸리티 함수들 ─────
+# ───── 새로운 유틸리티 함수 추가 ─────
+def parse_gpt_json_response(response_text: str) -> dict:
+    """GPT 응답에서 JSON 블록을 추출하고 파싱"""
+    try:
+        # ```json 블록에서 JSON 추출
+        if "```json" in response_text:
+            # ```json과 ``` 사이의 내용 추출
+            json_match = re.search(r'```json\s*\n(.*?)\n```', response_text, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(1).strip()
+            else:
+                # 다른 패턴 시도
+                json_str = response_text.replace('```json\n', '').replace('\n```', '').strip()
+        else:
+            json_str = response_text.strip()
+        
+        # JSON 파싱 시도
+        return json.loads(json_str)
+    except json.JSONDecodeError as e:
+        # JSON 파싱 실패 시 원본 텍스트를 포함한 오류 정보 반환
+        return {
+            "error": f"JSON 파싱 실패: {e}",
+            "raw_response": response_text
+        }
+    except Exception as e:
+        return {
+            "error": f"응답 처리 실패: {e}",
+            "raw_response": response_text
+        }
+
+def format_analysis_for_display(analysis_data: dict, analysis_type: str = "analysis") -> dict:
+    """분석 데이터를 표시용으로 포맷팅"""
+    if not analysis_data:
+        return {"error": "데이터 없음"}
+    
+    # 이미 파싱된 딕셔너리인 경우
+    if isinstance(analysis_data, dict) and "error" not in analysis_data:
+        return analysis_data
+    
+    # analysis 키에 JSON 문자열이 있는 경우
+    if isinstance(analysis_data, dict) and analysis_type in analysis_data:
+        return parse_gpt_json_response(analysis_data[analysis_type])
+    
+    # 기타 경우
+    return analysis_data
+
+def format_for_docx(data: dict, title: str) -> str:
+    """docx용 가독성 있는 텍스트 포맷팅"""
+    if not isinstance(data, dict):
+        return f"{title}: {str(data)}"
+    
+    if "error" in data:
+        return f"{title}: 오류 - {data['error']}"
+    
+    formatted_text = f"{title}:\n"
+    
+    # 논조 분석 데이터 포맷팅
+    if "논조분류" in data:
+        formatted_text += f"  • 논조분류: {data.get('논조분류', 'N/A')}\n"
+        formatted_text += f"  • 논조점수: {data.get('논조점수', 'N/A')}\n"
+        formatted_text += f"  • 신뢰도점수: {data.get('신뢰도점수', 'N/A')}/10\n"
+        formatted_text += f"  • 객관성점수: {data.get('객관성점수', 'N/A')}/10\n"
+        
+        if data.get('주요논점'):
+            formatted_text += "  • 주요논점:\n"
+            for i, point in enumerate(data['주요논점'], 1):
+                formatted_text += f"    {i}. {point}\n"
+        
+        if data.get('감정적언어'):
+            formatted_text += f"  • 감정적언어: {', '.join(data['감정적언어'])}\n"
+    
+    # 영어 표현 평가 데이터 포맷팅
+    elif "내용논리성" in data:
+        for key in ["내용논리성", "구성체계성", "문법어휘정확성"]:
+            if key in data and isinstance(data[key], dict):
+                formatted_text += f"  • {key}: {data[key].get('점수', 'N/A')}/4점\n"
+                formatted_text += f"    근거: {data[key].get('근거', 'N/A')}\n"
+        
+        if data.get('총점'):
+            formatted_text += f"  • 총점: {data['총점']}\n"
+        if data.get('종합평가'):
+            formatted_text += f"  • 종합평가: {data['종합평가']}\n"
+    
+    # 문제해결 평가 데이터 포맷팅
+    elif any(key in data for key in ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]):
+        for key in ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]:
+            if key in data:
+                if isinstance(data[key], dict):
+                    formatted_text += f"  • {key}: {data[key].get('점수', 'N/A')}/5점\n"
+                    if '개선제안' in data[key]:
+                        formatted_text += f"    개선제안: {data[key]['개선제안']}\n"
+                else:
+                    formatted_text += f"  • {key}: {data[key]}\n"
+    
+    # 기타 데이터
+    else:
+        for key, value in data.items():
+            if key not in ["error", "raw_response"]:
+                formatted_text += f"  • {key}: {value}\n"
+    
+    return formatted_text
+
+# ───── 기존 유틸리티 함수들 (수정됨) ─────
 def summarize_text(text: str) -> str:
     """기사 내용을 영어로 5-10문장으로 요약"""
     if not OPENAI_OK or client is None:
@@ -44,28 +147,22 @@ def summarize_text(text: str) -> str:
         return f"요약 실패: {e}"
 
 def analyze_tone_and_stance(text: str) -> dict:
-    """논조 및 입장 분석 - 점수화된 논조 포함"""
+    """논조 및 입장 분석 - 점수화된 논조 포함 (수정됨)"""
     if not OPENAI_OK or client is None:
         return {"error": "API 오류"}
     
     prompt = f"""
-    다음 기사의 논조와 입장을 분석해주세요:
+    다음 기사의 논조와 입장을 분석해주세요.
     
-    1. 논조 분류: positive/neutral/negative 중 하나 선택
-    2. 논조 점수: -3(매우 부정적) ~ +3(매우 긍정적) 사이의 정수
-    3. 주요 논점 3가지
-    4. 사용된 감정적 언어나 편향된 표현 (최대 5개)
-    5. 신뢰도 점수 (1-10점)
-    6. 객관성 점수 (1-10점)
+    응답은 반드시 다음 JSON 형식으로만 제공하고, 다른 텍스트는 포함하지 마세요:
     
-    JSON 형식으로 응답해주세요:
     {{
         "논조분류": "positive/neutral/negative",
-        "논조점수": 정수값,
+        "논조점수": -3~3 사이의 정수값,
         "주요논점": ["논점1", "논점2", "논점3"],
         "감정적언어": ["예시1", "예시2", "예시3"],
-        "신뢰도점수": 정수값,
-        "객관성점수": 정수값
+        "신뢰도점수": 1~10 사이의 정수값,
+        "객관성점수": 1~10 사이의 정수값
     }}
     
     기사: {text}
@@ -80,16 +177,120 @@ def analyze_tone_and_stance(text: str) -> dict:
         )
         
         result = response.choices[0].message.content.strip()
-        try:
-            return json.loads(result)
-        except:
-            return {"analysis": result}
+        return parse_gpt_json_response(result)
     except Exception as e:
         return {"error": f"분석 실패: {e}"}
 
+def evaluate_writing_rubric(text: str) -> dict:
+    """영어 표현 능력 루브릭 평가 (수정됨)"""
+    if not OPENAI_OK or client is None:
+        return {"error": "API 오류"}
+    
+    prompt = f"""
+    다음 영어 텍스트를 구체적인 루브릭 기준으로 평가해주세요.
+
+    **평가 영역 및 기준:**
+
+    **1. 내용 논리성 (Content Logic) - 1~4점**
+    **2. 구성 체계성 (Organization) - 1~4점**
+    **3. 문법·어휘 정확성 (Language Accuracy) - 1~4점**
+
+    응답은 반드시 다음 JSON 형식으로만 제공하고, 다른 텍스트는 포함하지 마세요:
+
+    {{
+        "내용논리성": {{
+            "점수": 1~4 사이의 정수값,
+            "근거": "구체적 평가 근거"
+        }},
+        "구성체계성": {{
+            "점수": 1~4 사이의 정수값, 
+            "근거": "구체적 평가 근거"
+        }},
+        "문법어휘정확성": {{
+            "점수": 1~4 사이의 정수값,
+            "근거": "구체적 평가 근거"
+        }},
+        "총점": "12점 만점 중 X점",
+        "종합평가": "전체적인 평가 및 개선 제안"
+    }}
+
+    평가 대상 텍스트: {text}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=800
+        )
+        
+        result = response.choices[0].message.content.strip()
+        return parse_gpt_json_response(result)
+    except Exception as e:
+        return {"error": f"평가 실패: {e}"}
+
+def assess_problem_solving(reflection_text: str) -> dict:
+    """문제해결 역량 평가 (수정됨)"""
+    if not OPENAI_OK or client is None:
+        return {"error": "API 오류"}
+    
+    # 성찰 내용이 너무 짧거나 의미없는 경우 처리
+    if not reflection_text or len(reflection_text.strip()) < 10:
+        return {
+            "assessment": f"성찰 내용이 \"{reflection_text}\"라는 한 단어로만 제공되어 있어, 학습자의 문제해결 역량을 평가하기에는 정보가 부족합니다. 성찰 내용에 대한 구체적인 정보가 필요합니다. 예를 들어, 학습자가 어떤 문제를 다루었는지, 그 문제를 어떻게 이해하고 분석했는지, 어떤 대안을 발견하고 실행 계획을 수립했는지, 그리고 의사소통을 어떻게 했는지에 대한 자세한 설명이 필요합니다.\n\n현재 제공된 정보로는 평가를 진행할 수 없으므로, 추가적인 성찰 내용을 제공해 주시면 감사하겠습니다."
+        }
+    
+    prompt = f"""
+    다음 학습자의 성찰 내용을 바탕으로 문제해결 역량을 평가해주세요:
+    
+    응답은 반드시 다음 JSON 형식으로만 제공하고, 다른 텍스트는 포함하지 마세요:
+    
+    {{
+        "문제이해": {{
+            "점수": 1~5 사이의 정수값,
+            "개선제안": "구체적인 개선 제안"
+        }},
+        "분석적사고": {{
+            "점수": 1~5 사이의 정수값,
+            "개선제안": "구체적인 개선 제안"
+        }},
+        "대안발견및기획": {{
+            "점수": 1~5 사이의 정수값,
+            "개선제안": "구체적인 개선 제안"
+        }},
+        "의사소통": {{
+            "점수": 1~5 사이의 정수값,
+            "개선제안": "구체적인 개선 제안"
+        }},
+        "총점": "20점 만점 중 X점",
+        "종합평가": "전체적인 평가 요약"
+    }}
+    
+    성찰 내용: {reflection_text}
+    """
+    
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=800
+        )
+        
+        result = response.choices[0].message.content.strip()
+        return parse_gpt_json_response(result)
+    except Exception as e:
+        return {"error": f"평가 실패: {e}"}
+
+# ───── 나머지 함수들은 기존과 동일 ─────
 def display_emotional_words(analysis1: dict, analysis2: dict) -> None:
     """감정적 언어 시각화"""
     st.markdown("#### 🔤 감정적 표현 비교")
+    
+    # 데이터 포맷팅
+    analysis1 = format_analysis_for_display(analysis1, "analysis")
+    analysis2 = format_analysis_for_display(analysis2, "analysis")
     
     col1, col2 = st.columns(2)
     
@@ -155,6 +356,10 @@ def create_simple_gauge(value: int, title: str) -> None:
 
 def create_enhanced_comparison_chart(analysis1: dict, analysis2: dict) -> None:
     """개선된 논조 비교 차트"""
+    # 데이터 포맷팅
+    analysis1 = format_analysis_for_display(analysis1, "analysis")
+    analysis2 = format_analysis_for_display(analysis2, "analysis")
+    
     if "error" in analysis1 or "error" in analysis2:
         st.error("논조 분석 데이터가 부족하여 차트를 생성할 수 없습니다.")
         return
@@ -226,106 +431,6 @@ def gpt_feedback(korean_text: str) -> str:
     except Exception as e:
         return f"⚠️ GPT 호출 오류: {e}"
 
-def evaluate_writing_rubric(text: str) -> dict:
-    """영어 표현 능력 루브릭 평가 - 구체적 기준 적용"""
-    if not OPENAI_OK or client is None:
-        return {"error": "API 오류"}
-    
-    prompt = f"""
-    다음 영어 텍스트를 구체적인 루브릭 기준으로 평가해주세요.
-
-    **평가 영역 및 기준:**
-
-    **1. 내용 논리성 (Content Logic) - 1~4점**
-    - 4점: 주장이 명확하고 일관성 있으며, 근거 제시가 충분하고 논리적 연결이 자연스러움. 다양한 관점을 균형적으로 고려하여 문제 상황에 대한 깊이 있는 분석을 보여줌
-    - 3점: 주장이 대체로 명확하고 근거가 적절하나, 일부 논리적 연결에서 미흡한 부분이 있음. 문제 상황에 대한 이해는 있으나 분석의 깊이가 부족함
-    - 2점: 주장은 있으나 명확성이 부족하고, 근거 제시가 미흡하며 논리적 흐름에 문제가 있음. 문제 상황에 대한 기본적 이해만 보여줌
-    - 1점: 주장이 불분명하고 근거가 부족하며, 논리적 구조가 혼란스러움. 문제 상황에 대한 이해가 부족함
-
-    **2. 구성 체계성 (Organization) - 1~4점**
-    - 4점: 서론-본론-결론의 구조가 명확하고, 문단 간 자연스러운 연결과 흐름을 보임. 응집성과 일관성이 뛰어나며 주제문과 뒷받침 문장이 효과적으로 배치됨
-    - 3점: 전체적 구조는 적절하나 일부 문단에서 연결이 어색하거나 흐름이 끊어지는 부분이 있음. 응집성과 일관성이 대체로 유지됨
-    - 2점: 기본적인 구조는 있으나 문단 구성이 미흡하고 연결어 사용이 부적절함. 일관성이 부족하여 읽기에 어려움이 있음
-    - 1점: 구조가 불분명하고 문단 구성이 혼란스러우며, 응집성과 일관성이 현저히 부족함
-
-    **3. 문법·어휘 정확성 (Language Accuracy) - 1~4점**
-    - 4점: 문법적 오류가 거의 없고 문장 구조가 다양하며 복잡함. 어휘 선택이 적절하고 다양하며, 학술적 글쓰기에 적합한 어휘를 효과적으로 사용함. 철자법과 구두점 사용이 정확함
-    - 3점: 문법적 오류가 적고 문장 구조가 대체로 적절함. 어휘 사용이 적절하나 다양성이 부족하거나 일부 부적절한 선택이 있음. 철자법과 구두점에 경미한 오류가 있음
-    - 2점: 문법적 오류가 있으나 의미 전달에 큰 지장은 없음. 어휘 선택이 단조롭고 일부 부적절한 사용이 있음. 철자법과 구두점 오류가 눈에 띔
-    - 1점: 문법적 오류가 빈번하여 의미 전달에 지장을 줌. 어휘 사용이 부적절하고 제한적임. 철자법과 구두점 오류가 많아 읽기에 어려움
-
-    JSON 형식으로 응답해주세요:
-    {{
-        "내용논리성": {{
-            "점수": 정수값,
-            "근거": "구체적 평가 근거"
-        }},
-        "구성체계성": {{
-            "점수": 정수값, 
-            "근거": "구체적 평가 근거"
-        }},
-        "문법어휘정확성": {{
-            "점수": 정수값,
-            "근거": "구체적 평가 근거"
-        }},
-        "총점": "12점 만점 중 X점",
-        "종합평가": "전체적인 평가 및 개선 제안"
-    }}
-
-    평가 대상 텍스트: {text}
-    """
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=800
-        )
-        
-        result = response.choices[0].message.content.strip()
-        try:
-            return json.loads(result)
-        except:
-            return {"evaluation": result}
-    except Exception as e:
-        return {"error": f"평가 실패: {e}"}
-
-def assess_problem_solving(reflection_text: str) -> dict:
-    """문제해결 역량 평가"""
-    if not OPENAI_OK or client is None:
-        return {"error": "API 오류"}
-    
-    prompt = f"""
-    다음 학습자의 성찰 내용을 바탕으로 문제해결 역량을 평가해주세요:
-    
-    평가 영역:
-    1. 문제이해: 핵심 문제 파악, 요소 분석 능력 (1-5점)
-    2. 분석적 사고: 정보 비교, 논리적 판단 능력 (1-5점)
-    3. 대안발견 및 기획: 창의적 해결방안, 실행계획 수립 (1-5점)
-    4. 의사소통: 명확한 표현, 건설적 토론 능력 (1-5점)
-    
-    각 영역별 점수와 개선 제안을 JSON 형식으로 제공해주세요.
-    
-    성찰 내용: {reflection_text}
-    """
-    
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
-            max_tokens=800
-        )
-        
-        result = response.choices[0].message.content.strip()
-        try:
-            return json.loads(result)
-        except:
-            return {"assessment": result}
-    except Exception as e:
-        return {"error": f"평가 실패: {e}"}
-
 def translate_to_korean(text: str) -> str:
     """영문 텍스트를 한국어로 번역"""
     if not OPENAI_OK or client is None:
@@ -367,7 +472,7 @@ def translate_to_english(text: str) -> str:
         return f"번역 실패: {e}"
 
 def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
-    """텍스트를 DOCX 파일로 변환하여 바이트 데이터 반환"""
+    """텍스트를 DOCX 파일로 변환하여 바이트 데이터 반환 (수정됨)"""
     doc = Document()
     doc.add_heading('News Comparison Analysis', 0)
     doc.add_paragraph(f"작성일: {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}")
@@ -375,8 +480,25 @@ def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
     
     if analysis_data:
         doc.add_heading('분석 요약', level=1)
+        
         for key, value in analysis_data.items():
-            doc.add_paragraph(f"{key}: {value}")
+            if key == "논조분석1":
+                formatted_analysis1 = format_analysis_for_display(value, "analysis")
+                doc.add_paragraph(format_for_docx(formatted_analysis1, "논조분석1"))
+                doc.add_paragraph("")
+            elif key == "논조분석2":
+                formatted_analysis2 = format_analysis_for_display(value, "analysis")
+                doc.add_paragraph(format_for_docx(formatted_analysis2, "논조분석2"))
+                doc.add_paragraph("")
+            elif key == "영어표현평가":
+                formatted_evaluation = format_analysis_for_display(value, "evaluation")
+                doc.add_paragraph(format_for_docx(formatted_evaluation, "영어표현평가"))
+                doc.add_paragraph("")
+            elif key == "문제해결평가":
+                formatted_problem_solving = format_analysis_for_display(value, "assessment")
+                doc.add_paragraph(format_for_docx(formatted_problem_solving, "문제해결평가"))
+                doc.add_paragraph("")
+        
         doc.add_paragraph("")
     
     doc.add_heading('작성된 설명문', level=1)
@@ -506,18 +628,18 @@ elif st.session_state.stage == "analysis":
             st.success(f"**[한국어]**\n{st.session_state.summary1_kr}")
         
         with st.expander("논조 분석", expanded=True):
-            if "error" not in st.session_state.tone_analysis1:
-                analysis = st.session_state.tone_analysis1
-                st.markdown(f"**논조**: {analysis.get('논조분류', 'N/A')} ({analysis.get('논조점수', 0)}점)")
-                st.markdown(f"**신뢰도**: {analysis.get('신뢰도점수', 0)}/10점")
-                st.markdown(f"**객관성**: {analysis.get('객관성점수', 0)}/10점")
+            analysis1 = format_analysis_for_display(st.session_state.tone_analysis1, "analysis")
+            if "error" not in analysis1:
+                st.markdown(f"**논조**: {analysis1.get('논조분류', 'N/A')} ({analysis1.get('논조점수', 0)}점)")
+                st.markdown(f"**신뢰도**: {analysis1.get('신뢰도점수', 0)}/10점")
+                st.markdown(f"**객관성**: {analysis1.get('객관성점수', 0)}/10점")
                 
-                if analysis.get('주요논점'):
+                if analysis1.get('주요논점'):
                     st.markdown("**주요 논점**:")
-                    for i, point in enumerate(analysis.get('주요논점', []), 1):
+                    for i, point in enumerate(analysis1.get('주요논점', []), 1):
                         st.markdown(f"  {i}. {point}")
             else:
-                st.error(st.session_state.tone_analysis1["error"])
+                st.error(analysis1.get("error", "분석 오류"))
     
     with col2:
         st.markdown("#### 🗞️ 기사 2 분석")
@@ -526,18 +648,18 @@ elif st.session_state.stage == "analysis":
             st.success(f"**[한국어]**\n{st.session_state.summary2_kr}")
         
         with st.expander("논조 분석", expanded=True):
-            if "error" not in st.session_state.tone_analysis2:
-                analysis = st.session_state.tone_analysis2
-                st.markdown(f"**논조**: {analysis.get('논조분류', 'N/A')} ({analysis.get('논조점수', 0)}점)")
-                st.markdown(f"**신뢰도**: {analysis.get('신뢰도점수', 0)}/10점")
-                st.markdown(f"**객관성**: {analysis.get('객관성점수', 0)}/10점")
+            analysis2 = format_analysis_for_display(st.session_state.tone_analysis2, "analysis")
+            if "error" not in analysis2:
+                st.markdown(f"**논조**: {analysis2.get('논조분류', 'N/A')} ({analysis2.get('논조점수', 0)}점)")
+                st.markdown(f"**신뢰도**: {analysis2.get('신뢰도점수', 0)}/10점")
+                st.markdown(f"**객관성**: {analysis2.get('객관성점수', 0)}/10점")
                 
-                if analysis.get('주요논점'):
+                if analysis2.get('주요논점'):
                     st.markdown("**주요 논점**:")
-                    for i, point in enumerate(analysis.get('주요논점', []), 1):
+                    for i, point in enumerate(analysis2.get('주요논점', []), 1):
                         st.markdown(f"  {i}. {point}")
             else:
-                st.error(st.session_state.tone_analysis2["error"])
+                st.error(analysis2.get("error", "분석 오류"))
     
     # 논조 시각화
     st.markdown("---")
@@ -577,7 +699,7 @@ elif st.session_state.stage == "analysis":
                 st.session_state.stage = "draft"
                 st.rerun()
 
-# 3단계: 초안 작성
+# 3단계: 초안 작성 (기존과 동일하므로 생략)
 elif st.session_state.stage == "draft":
     st.subheader("③ 비교 설명문 초안 작성")
 
@@ -725,7 +847,7 @@ elif st.session_state.stage == "draft":
             else:
                 overall_draft_error.error("모든 문단을 작성해주세요.")
 
-# 4단계: AI 피드백 (한국어 전용)
+# 4단계: AI 피드백 (수정됨)
 elif st.session_state.stage == "feedback":
     st.subheader("④ AI 피드백 및 루브릭 평가")
     
@@ -770,29 +892,35 @@ elif st.session_state.stage == "feedback":
         
         with tab2:
             st.markdown("#### 📋 영어 표현 능력 평가")
-            if st.session_state.writing_evaluation and "error" not in st.session_state.writing_evaluation:
-                eval_data = st.session_state.writing_evaluation
-                
+            eval_data = format_analysis_for_display(st.session_state.writing_evaluation, "evaluation")
+            
+            if "error" not in eval_data:
                 # 점수 카드 형태로 표시
                 col1, col2, col3 = st.columns(3)
                 
                 with col1:
-                    if "내용논리성" in eval_data:
+                    if "내용논리성" in eval_data and isinstance(eval_data["내용논리성"], dict):
                         logic = eval_data["내용논리성"]
                         st.metric("내용 논리성", f"{logic.get('점수', 0)}/4점")
                         st.caption(logic.get('근거', ''))
+                    else:
+                        st.metric("내용 논리성", "N/A")
                 
                 with col2:
-                    if "구성체계성" in eval_data:
+                    if "구성체계성" in eval_data and isinstance(eval_data["구성체계성"], dict):
                         org = eval_data["구성체계성"]
                         st.metric("구성 체계성", f"{org.get('점수', 0)}/4점")
                         st.caption(org.get('근거', ''))
+                    else:
+                        st.metric("구성 체계성", "N/A")
                 
                 with col3:
-                    if "문법어휘정확성" in eval_data:
+                    if "문법어휘정확성" in eval_data and isinstance(eval_data["문법어휘정확성"], dict):
                         lang = eval_data["문법어휘정확성"]
                         st.metric("문법·어휘", f"{lang.get('점수', 0)}/4점")
                         st.caption(lang.get('근거', ''))
+                    else:
+                        st.metric("문법·어휘", "N/A")
                 
                 if eval_data.get('총점'):
                     st.markdown(f"**총점**: {eval_data['총점']}")
@@ -801,7 +929,7 @@ elif st.session_state.stage == "feedback":
                     st.markdown("**종합 평가**")
                     st.info(eval_data['종합평가'])
             else:
-                st.error(st.session_state.writing_evaluation.get("error", "평가 오류") if st.session_state.writing_evaluation else "평가 데이터 없음")
+                st.error(eval_data.get("error", "평가 오류"))
     
     st.markdown("---")
     st.markdown("#### 🤔 피드백 성찰")
@@ -834,7 +962,7 @@ elif st.session_state.stage == "feedback":
                 st.session_state.stage = "final"
                 st.rerun()
 
-# 5단계: 최종 완성
+# 5단계: 최종 완성 (수정됨)
 elif st.session_state.stage == "final":
     st.subheader("⑤ 최종 수정 및 완성")
     
@@ -860,49 +988,68 @@ elif st.session_state.stage == "final":
         # 문제해결 역량 평가 결과
         if st.session_state.problem_solving_score:
             with st.expander("🧠 문제해결 역량 평가", expanded=True):
-                if "error" not in st.session_state.problem_solving_score:
-                    eval_data = st.session_state.problem_solving_score
-                    
-                    # 4개 영역을 2x2 그리드로 배치
-                    col1, col2 = st.columns(2)
-                    
-                    areas = ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]
-                    for i, area in enumerate(areas):
-                        col = col1 if i % 2 == 0 else col2
-                        with col:
-                            if area in eval_data:
-                                score = eval_data[area].get('점수', 0) if isinstance(eval_data[area], dict) else 0
-                                st.metric(area.replace('및', ' & '), f"{score}/5점")
+                problem_data = format_analysis_for_display(st.session_state.problem_solving_score, "assessment")
+                
+                if "error" not in problem_data:
+                    # assessment 키가 있는 경우 (간단한 텍스트 응답)
+                    if "assessment" in problem_data:
+                        st.info(problem_data["assessment"])
+                    else:
+                        # 4개 영역을 2x2 그리드로 배치
+                        col1, col2 = st.columns(2)
+                        
+                        areas = ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]
+                        for i, area in enumerate(areas):
+                            col = col1 if i % 2 == 0 else col2
+                            with col:
+                                if area in problem_data and isinstance(problem_data[area], dict):
+                                    score = problem_data[area].get('점수', 0)
+                                    st.metric(area.replace('및', ' & '), f"{score}/5점")
+                                elif area in problem_data:
+                                    st.metric(area.replace('및', ' & '), str(problem_data[area]))
+                        
+                        if problem_data.get('총점'):
+                            st.markdown(f"**총점**: {problem_data['총점']}")
+                        
+                        if problem_data.get('종합평가'):
+                            st.markdown("**종합 평가**")
+                            st.info(problem_data['종합평가'])
                 else:
-                    st.error(st.session_state.problem_solving_score["error"])
+                    st.error(problem_data.get("error", "평가 오류"))
         
         # 영어 표현 능력 평가 결과
         if st.session_state.writing_evaluation:
             with st.expander("✍️ 영어 표현 능력 평가", expanded=True):
-                if "error" not in st.session_state.writing_evaluation:
-                    eval_data = st.session_state.writing_evaluation
-                    
+                eval_data = format_analysis_for_display(st.session_state.writing_evaluation, "evaluation")
+                
+                if "error" not in eval_data:
                     col1, col2, col3 = st.columns(3)
                     
                     with col1:
-                        if "내용논리성" in eval_data:
+                        if "내용논리성" in eval_data and isinstance(eval_data["내용논리성"], dict):
                             logic = eval_data["내용논리성"]
-                            score = logic.get('점수', 0) if isinstance(logic, dict) else 0
+                            score = logic.get('점수', 0)
                             st.metric("내용 논리성", f"{score}/4점")
+                        else:
+                            st.metric("내용 논리성", "N/A")
                     
                     with col2:
-                        if "구성체계성" in eval_data:
+                        if "구성체계성" in eval_data and isinstance(eval_data["구성체계성"], dict):
                             org = eval_data["구성체계성"]
-                            score = org.get('점수', 0) if isinstance(org, dict) else 0
+                            score = org.get('점수', 0)
                             st.metric("구성 체계성", f"{score}/4점")
+                        else:
+                            st.metric("구성 체계성", "N/A")
                     
                     with col3:
-                        if "문법어휘정확성" in eval_data:
+                        if "문법어휘정확성" in eval_data and isinstance(eval_data["문법어휘정확성"], dict):
                             lang = eval_data["문법어휘정확성"]
-                            score = lang.get('점수', 0) if isinstance(lang, dict) else 0
+                            score = lang.get('점수', 0)
                             st.metric("문법·어휘", f"{score}/4점")
+                        else:
+                            st.metric("문법·어휘", "N/A")
                 else:
-                    st.error(st.session_state.writing_evaluation["error"])
+                    st.error(eval_data.get("error", "평가 오류"))
     
     st.markdown("---")
     
