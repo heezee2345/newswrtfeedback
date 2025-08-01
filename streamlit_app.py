@@ -507,7 +507,15 @@ elif st.session_state.stage == "analysis":
         
         with st.expander("논조 분석", expanded=True):
             if "error" not in st.session_state.tone_analysis1:
-                st.json(st.session_state.tone_analysis1)
+                analysis = st.session_state.tone_analysis1
+                st.markdown(f"**논조**: {analysis.get('논조분류', 'N/A')} ({analysis.get('논조점수', 0)}점)")
+                st.markdown(f"**신뢰도**: {analysis.get('신뢰도점수', 0)}/10점")
+                st.markdown(f"**객관성**: {analysis.get('객관성점수', 0)}/10점")
+                
+                if analysis.get('주요논점'):
+                    st.markdown("**주요 논점**:")
+                    for i, point in enumerate(analysis.get('주요논점', []), 1):
+                        st.markdown(f"  {i}. {point}")
             else:
                 st.error(st.session_state.tone_analysis1["error"])
     
@@ -519,7 +527,15 @@ elif st.session_state.stage == "analysis":
         
         with st.expander("논조 분석", expanded=True):
             if "error" not in st.session_state.tone_analysis2:
-                st.json(st.session_state.tone_analysis2)
+                analysis = st.session_state.tone_analysis2
+                st.markdown(f"**논조**: {analysis.get('논조분류', 'N/A')} ({analysis.get('논조점수', 0)}점)")
+                st.markdown(f"**신뢰도**: {analysis.get('신뢰도점수', 0)}/10점")
+                st.markdown(f"**객관성**: {analysis.get('객관성점수', 0)}/10점")
+                
+                if analysis.get('주요논점'):
+                    st.markdown("**주요 논점**:")
+                    for i, point in enumerate(analysis.get('주요논점', []), 1):
+                        st.markdown(f"  {i}. {point}")
             else:
                 st.error(st.session_state.tone_analysis2["error"])
     
@@ -755,7 +771,35 @@ elif st.session_state.stage == "feedback":
         with tab2:
             st.markdown("#### 📋 영어 표현 능력 평가")
             if st.session_state.writing_evaluation and "error" not in st.session_state.writing_evaluation:
-                st.json(st.session_state.writing_evaluation)
+                eval_data = st.session_state.writing_evaluation
+                
+                # 점수 카드 형태로 표시
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    if "내용논리성" in eval_data:
+                        logic = eval_data["내용논리성"]
+                        st.metric("내용 논리성", f"{logic.get('점수', 0)}/4점")
+                        st.caption(logic.get('근거', ''))
+                
+                with col2:
+                    if "구성체계성" in eval_data:
+                        org = eval_data["구성체계성"]
+                        st.metric("구성 체계성", f"{org.get('점수', 0)}/4점")
+                        st.caption(org.get('근거', ''))
+                
+                with col3:
+                    if "문법어휘정확성" in eval_data:
+                        lang = eval_data["문법어휘정확성"]
+                        st.metric("문법·어휘", f"{lang.get('점수', 0)}/4점")
+                        st.caption(lang.get('근거', ''))
+                
+                if eval_data.get('총점'):
+                    st.markdown(f"**총점**: {eval_data['총점']}")
+                
+                if eval_data.get('종합평가'):
+                    st.markdown("**종합 평가**")
+                    st.info(eval_data['종합평가'])
             else:
                 st.error(st.session_state.writing_evaluation.get("error", "평가 오류") if st.session_state.writing_evaluation else "평가 데이터 없음")
     
@@ -817,7 +861,18 @@ elif st.session_state.stage == "final":
         if st.session_state.problem_solving_score:
             with st.expander("🧠 문제해결 역량 평가", expanded=True):
                 if "error" not in st.session_state.problem_solving_score:
-                    st.json(st.session_state.problem_solving_score)
+                    eval_data = st.session_state.problem_solving_score
+                    
+                    # 4개 영역을 2x2 그리드로 배치
+                    col1, col2 = st.columns(2)
+                    
+                    areas = ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]
+                    for i, area in enumerate(areas):
+                        col = col1 if i % 2 == 0 else col2
+                        with col:
+                            if area in eval_data:
+                                score = eval_data[area].get('점수', 0) if isinstance(eval_data[area], dict) else 0
+                                st.metric(area.replace('및', ' & '), f"{score}/5점")
                 else:
                     st.error(st.session_state.problem_solving_score["error"])
         
@@ -825,7 +880,27 @@ elif st.session_state.stage == "final":
         if st.session_state.writing_evaluation:
             with st.expander("✍️ 영어 표현 능력 평가", expanded=True):
                 if "error" not in st.session_state.writing_evaluation:
-                    st.json(st.session_state.writing_evaluation)
+                    eval_data = st.session_state.writing_evaluation
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        if "내용논리성" in eval_data:
+                            logic = eval_data["내용논리성"]
+                            score = logic.get('점수', 0) if isinstance(logic, dict) else 0
+                            st.metric("내용 논리성", f"{score}/4점")
+                    
+                    with col2:
+                        if "구성체계성" in eval_data:
+                            org = eval_data["구성체계성"]
+                            score = org.get('점수', 0) if isinstance(org, dict) else 0
+                            st.metric("구성 체계성", f"{score}/4점")
+                    
+                    with col3:
+                        if "문법어휘정확성" in eval_data:
+                            lang = eval_data["문법어휘정확성"]
+                            score = lang.get('점수', 0) if isinstance(lang, dict) else 0
+                            st.metric("문법·어휘", f"{score}/4점")
                 else:
                     st.error(st.session_state.writing_evaluation["error"])
     
