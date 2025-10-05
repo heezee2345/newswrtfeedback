@@ -7,6 +7,7 @@ import tempfile
 import json
 import pandas as pd
 import re
+from typing import Dict, Any, Union
 
 # 루브릭 기준 정의
 RUBRIC_CRITERIA = {
@@ -46,23 +47,32 @@ if OPENAI_OK:
         st.error(f"OpenAI 초기화 실패: {e}")
         OPENAI_OK = False
 
+# 누락된 함수 추가 - 문제 1 해결
+def display_rubric():
+    """루브릭 기준 표시"""
+    st.markdown("### 평가 기준 (루브릭)")
+    st.markdown("글을 쓰기 전에 평가 기준을 확인해보세요!")
+    
+    for category, criteria in RUBRIC_CRITERIA.items():
+        with st.expander(f"{category} 평가 기준", expanded=False):
+            for score, description in criteria.items():
+                st.markdown(f"**{score}**: {description}")
+
 # 새로운 유틸리티 함수 추가
 def parse_gpt_json_response(response_text: str) -> dict:
     """GPT 응답에서 JSON 블록을 추출하고 파싱"""
     try:
         # ```json 블록에서 JSON 추출
         if "```json" in response_text:
-            # ```json과 ``` 사이의 내용 추출
             json_match = re.search(r'```json\s*\n(.*?)\n```', response_text, re.DOTALL)
             if json_match:
                 json_str = json_match.group(1).strip()
             else:
-                # 다른 패턴 시도
                 json_str = response_text.replace('```json\n', '').replace('\n```', '').strip()
         else:
             json_str = response_text.strip()
         
-        # JSON 파싱 시도
+        # JSON 파싱 시도 (더 유연하게)
         return json.loads(json_str)
     except json.JSONDecodeError as e:
         # JSON 파싱 실패 시 원본 텍스트를 포함한 오류 정보 반환
@@ -76,90 +86,40 @@ def parse_gpt_json_response(response_text: str) -> dict:
             "raw_response": response_text
         }
 
-def format_analysis_for_display(analysis_data: dict, analysis_type: str = "analysis") -> dict:
+def format_analysis_for_display(analysis_data: Union[dict, str], analysis_type: str = "analysis") -> dict:
     """분석 데이터를 표시용으로 포맷팅"""
     if not analysis_data:
         return {"error": "데이터 없음"}
     
-    # 이미 파싱된 딕셔너리인 경우
     if isinstance(analysis_data, dict) and "error" not in analysis_data:
         return analysis_data
     
-    # analysis 키에 JSON 문자열이 있는 경우
     if isinstance(analysis_data, dict) and analysis_type in analysis_data:
         return parse_gpt_json_response(analysis_data[analysis_type])
     
-    # 기타 경우
     return analysis_data
 
-def format_for_docx(data: dict, title: str) -> str:
-    """docx용 가독성 있는 텍스트 포맷팅"""
-    if not isinstance(data, dict):
-        return f"{title}: {str(data)}"
+def format_docx_section(doc, title: str, data: dict):
+    """DOCX 문서에 특정 분석 섹션을 포맷팅하여 추가"""
+    doc.add_heading(title, level=2)
     
     if "error" in data:
-        return f"{title}: 오류 - {data['error']}"
-    
-    formatted_text = f"{title}:\n"
-    
-    # 논조 분석 데이터 포맷팅
-    if "논조분류" in data:
-        formatted_text += f"  • 논조분류: {data.get('논조분류', 'N/A')}\n"
-        formatted_text += f"  • 논조점수: {data.get('논조점수', 'N/A')}\n"
-        formatted_text += f"  • 신뢰도점수: {data.get('신뢰도점수', 'N/A')}/10\n"
-        formatted_text += f"  • 객관성점수: {data.get('객관성점수', 'N/A')}/10\n"
+        doc.add_paragraph(f"오류: {data['error']}")
+        return
         
-        if data.get('주요논점'):
-            formatted_text += "  • 주요논점:\n"
-            for i, point in enumerate(data['주요논점'], 1):
-                formatted_text += f"    {i}. {point}\n"
-        
-        if data.get('감정적언어'):
-            formatted_text += f"  • 감정적언어: {', '.join(data['감정적언어'])}\n"
-    
-    # 영어 표현 평가 데이터 포맷팅
-    elif "내용논리성" in data:
-        for key in ["내용논리성", "구성체계성", "문법어휘정확성"]:
-            if key in data and isinstance(data[key], dict):
-                formatted_text += f"  • {key}: {data[key].get('점수', 'N/A')}/4점\n"
-                formatted_text += f"    근거: {data[key].get('근거', 'N/A')}\n"
-        
-        if data.get('총점'):
-            formatted_text += f"  • 총점: {data['총점']}\n"
-        if data.get('종합평가'):
-            formatted_text += f"  • 종합평가: {data['종합평가']}\n"
-    
-    # 문제해결 평가 데이터 포맷팅
-    elif any(key in data for key in ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]):
-        for key in ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]:
-            if key in data:
-                if isinstance(data[key], dict):
-                    formatted_text += f"  • {key}: {data[key].get('점수', 'N/A')}/5점\n"
-                    if '개선제안' in data[key]:
-                        formatted_text += f"    개선제안: {data[key]['개선제안']}\n"
-                else:
-                    formatted_text += f"  • {key}: {data[key]}\n"
-    
-    # 기타 데이터
-    else:
-        for key, value in data.items():
-            if key not in ["error", "raw_response"]:
-                formatted_text += f"  • {key}: {value}\n"
-    
-    return formatted_text
+    for key, value in data.items():
+        if isinstance(value, dict):
+            doc.add_paragraph(f"• {key}: {value.get('점수', 'N/A')}/4점")
+            if '근거' in value:
+                doc.add_paragraph(f"    - 근거: {value['근거']}")
+            if '개선제안' in value:
+                doc.add_paragraph(f"    - 개선 제안: {value['개선제안']}")
+        elif isinstance(value, list):
+            doc.add_paragraph(f"• {key}: {', '.join(value)}")
+        else:
+            doc.add_paragraph(f"• {key}: {value}")
+    doc.add_paragraph("")
 
-# 루브릭 표시 함수
-def display_rubric():
-    """루브릭 기준 표시"""
-    st.markdown("### 평가 기준 (루브릭)")
-    st.markdown("글을 쓰기 전에 평가 기준을 확인해보세요!")
-    
-    for category, criteria in RUBRIC_CRITERIA.items():
-        with st.expander(f"{category} 평가 기준", expanded=False):
-            for score, description in criteria.items():
-                st.markdown(f"**{score}**: {description}")
-
-# 문단별 피드백 함수
 def get_paragraph_feedback(text: str, paragraph_type: str, context: dict = None) -> dict:
     """문단별 즉시 피드백 제공"""
     if not OPENAI_OK or client is None:
@@ -168,7 +128,6 @@ def get_paragraph_feedback(text: str, paragraph_type: str, context: dict = None)
     if not text.strip():
         return {"error": "입력된 텍스트가 없습니다"}
     
-    # 맥락 정보 구성
     context_info = ""
     if context:
         if context.get("summary1") and context.get("summary2"):
@@ -204,127 +163,10 @@ def get_paragraph_feedback(text: str, paragraph_type: str, context: dict = None)
         
         result = response.choices[0].message.content.strip()
         return parse_gpt_json_response(result)
+    except APIError as e:
+        return {"error": f"피드백 생성 실패: OpenAI API 오류 - {e}"}
     except Exception as e:
         return {"error": f"피드백 생성 실패: {e}"}
-
-# 자기평가 인터페이스
-def self_assessment_interface():
-    """자기평가 인터페이스"""
-    st.subheader("자기평가")
-    st.markdown("AI 피드백을 받기 전에 먼저 본인의 글을 스스로 평가해보세요.")
-    
-    # 루브릭 다시 보기 버튼
-    if st.button("평가 기준 다시 보기"):
-        display_rubric()
-    
-    st.markdown("---")
-    
-    self_scores = {}
-    self_reflections = {}
-    
-    # 각 영역별 자기평가
-    categories = ["내용논리성", "구성체계성", "문법어휘정확성"]
-    
-    for category in categories:
-        st.markdown(f"#### {category}")
-        
-        col1, col2 = st.columns([1, 2])
-        
-        with col1:
-            score = st.selectbox(
-                f"{category} 점수",
-                options=[1, 2, 3, 4],
-                format_func=lambda x: f"{x}점",
-                key=f"self_{category}_score"
-            )
-            self_scores[category] = score
-        
-        with col2:
-            reflection = st.text_area(
-                f"{category} 평가 이유",
-                placeholder=f"왜 {score}점을 주었는지 구체적으로 적어보세요...",
-                height=80,
-                key=f"self_{category}_reflection"
-            )
-            self_reflections[category] = reflection
-    
-    # 전체 성찰
-    st.markdown("#### 전체적인 자기 성찰")
-    overall_reflection = st.text_area(
-        "작성 과정에서 어려웠던 점, 잘했다고 생각하는 부분, 개선하고 싶은 부분을 자유롭게 적어보세요.",
-        height=100,
-        key="overall_self_reflection"
-    )
-    
-    return {
-        "scores": self_scores,
-        "reflections": self_reflections,
-        "overall_reflection": overall_reflection
-    }
-
-# 종합적 피드백 함수
-def enhanced_gpt_feedback(korean_text: str, self_assessment: dict, paragraph_feedback: dict = None) -> str:
-    """자기평가와 문단별 피드백이 반영된 종합적 GPT 피드백"""
-    if not OPENAI_OK or client is None:
-        return "GPT 사용을 위한 OpenAI API 키가 설정되지 않았거나 문제가 있습니다."
-    if not korean_text.strip():
-        return "피드백할 텍스트가 없습니다."
-
-    # 자기평가 정보 구성
-    self_scores_str = ", ".join([f"{k}: {v}점" for k, v in self_assessment["scores"].items()])
-    self_reflections_str = "\n".join([f"- {k}: {v}" for k, v in self_assessment["reflections"].items() if v.strip()])
-    
-    # 문단별 피드백 요약
-    paragraph_summary = ""
-    if paragraph_feedback:
-        paragraph_summary = "학습 과정에서 받은 문단별 피드백:\n"
-        for section, feedback in paragraph_feedback.items():
-            if isinstance(feedback, dict) and "구체적제안" in feedback:
-                paragraph_summary += f"- {section}: {feedback['구체적제안']}\n"
-    
-    prompt = f"""
-    당신은 경험 많은 글쓰기 지도교사입니다. 학습자가 작문 과정에서 다음과 같은 학습 활동을 했습니다:
-
-    **학습자의 자기평가 결과:**
-    - 점수: {self_scores_str}
-    - 자기성찰: 
-    {self_reflections_str}
-    - 전체 성찰: {self_assessment["overall_reflection"]}
-
-    {paragraph_summary}
-
-    **종합 평가 기준:**
-    1. 내용 논리성: 주장의 명확성, 근거 제시 충분성, 논리적 연결
-    2. 구성 체계성: 서론-본론-결론 구조, 문단 간 연결과 흐름, 응집성
-    3. 문법·어휘 정확성: 문법적 정확성, 어휘 선택의 적절성
-
-    **종합 피드백 구성:**
-    1. 학습 과정에 대한 격려와 인정
-    2. 자기평가 정확도 분석 (동의/차이점과 그 이유)
-    3. 각 영역별 구체적 피드백과 객관적 평가 (1-4점)
-    4. 학습자가 놓친 강점 발견하여 격려
-    5. 우선순위가 있는 구체적 개선 제안 (3-4가지)
-    6. 다음 글쓰기를 위한 목표 설정 제안
-
-    평가 대상 글:
-    {korean_text}
-    """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": "당신은 건설적이고 격려적인 글쓰기 지도교사입니다. 학습자의 성장을 돕는 것이 목표입니다."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.2,
-            max_tokens=1800
-        )
-        return response.choices[0].message.content.strip()
-    except APIError as e:
-        return f"OpenAI API 오류: {e}"
-    except Exception as e:
-        return f"GPT 호출 오류: {e}"
 
 def summarize_paragraph_feedback(paragraph_feedback: dict) -> str:
     """문단별 피드백을 요약"""
@@ -341,7 +183,6 @@ def summarize_paragraph_feedback(paragraph_feedback: dict) -> str:
                 summary += f"- {section}: 피드백 없음\n"
     return summary
 
-# 기존 유틸리티 함수들 (수정되지 않음)
 def summarize_text(text: str) -> str:
     """기사 내용을 영어로 5-10문장으로 요약"""
     if not OPENAI_OK or client is None:
@@ -358,6 +199,8 @@ def summarize_text(text: str) -> str:
             max_tokens=800
         )
         return response.choices[0].message.content.strip()
+    except APIError as e:
+        return f"요약 실패: OpenAI API 오류 - {e}"
     except Exception as e:
         return f"요약 실패: {e}"
 
@@ -393,6 +236,8 @@ def analyze_tone_and_stance(text: str) -> dict:
         
         result = response.choices[0].message.content.strip()
         return parse_gpt_json_response(result)
+    except APIError as e:
+        return {"error": f"분석 실패: OpenAI API 오류 - {e}"}
     except Exception as e:
         return {"error": f"분석 실패: {e}"}
 
@@ -442,6 +287,8 @@ def evaluate_writing_rubric(text: str) -> dict:
         
         result = response.choices[0].message.content.strip()
         return parse_gpt_json_response(result)
+    except APIError as e:
+        return {"error": f"평가 실패: OpenAI API 오류 - {e}"}
     except Exception as e:
         return {"error": f"평가 실패: {e}"}
 
@@ -450,10 +297,9 @@ def assess_problem_solving(reflection_text: str) -> dict:
     if not OPENAI_OK or client is None:
         return {"error": "API 오류"}
     
-    # 성찰 내용이 너무 짧거나 의미없는 경우 처리
     if not reflection_text or len(reflection_text.strip()) < 10:
         return {
-            "assessment": f"성찰 내용이 \"{reflection_text}\"라는 한 단어로만 제공되어 있어, 학습자의 문제해결 역량을 평가하기에는 정보가 부족합니다. 성찰 내용에 대한 구체적인 정보가 필요합니다. 예를 들어, 학습자가 어떤 문제를 다루었는지, 그 문제를 어떻게 이해하고 분석했는지, 어떤 대안을 발견하고 실행 계획을 수립했는지, 그리고 의사소통을 어떻게 했는지에 대한 자세한 설명이 필요합니다.\n\n현재 제공된 정보로는 평가를 진행할 수 없으므로, 추가적인 성찰 내용을 제공해 주시면 감사하겠습니다."
+            "assessment": "성찰 내용이 너무 짧아 평가하기에 정보가 부족합니다. 문제 해결 과정에 대한 구체적인 설명을 포함해 주세요."
         }
     
     prompt = f"""
@@ -495,15 +341,15 @@ def assess_problem_solving(reflection_text: str) -> dict:
         
         result = response.choices[0].message.content.strip()
         return parse_gpt_json_response(result)
+    except APIError as e:
+        return {"error": f"평가 실패: OpenAI API 오류 - {e}"}
     except Exception as e:
         return {"error": f"평가 실패: {e}"}
 
-# 나머지 함수들은 기존과 동일
 def display_emotional_words(analysis1: dict, analysis2: dict) -> None:
     """감정적 언어 시각화"""
     st.markdown("#### 감정적 표현 비교")
     
-    # 데이터 포맷팅
     analysis1 = format_analysis_for_display(analysis1, "analysis")
     analysis2 = format_analysis_for_display(analysis2, "analysis")
     
@@ -571,7 +417,6 @@ def create_simple_gauge(value: int, title: str) -> None:
 
 def create_enhanced_comparison_chart(analysis1: dict, analysis2: dict) -> None:
     """개선된 논조 비교 차트"""
-    # 데이터 포맷팅
     analysis1 = format_analysis_for_display(analysis1, "analysis")
     analysis2 = format_analysis_for_display(analysis2, "analysis")
     
@@ -588,7 +433,6 @@ def create_enhanced_comparison_chart(analysis1: dict, analysis2: dict) -> None:
     with col2:
         create_simple_gauge(analysis2.get('논조점수', 0), "기사 2 논조")
     
-    # 신뢰도 & 객관성 차트
     st.markdown("#### 신뢰도 및 객관성")
     
     trust1 = analysis1.get('신뢰도점수', 5)
@@ -603,12 +447,21 @@ def create_enhanced_comparison_chart(analysis1: dict, analysis2: dict) -> None:
     })
     st.bar_chart(metrics_df.set_index('지표'))
 
-def gpt_feedback(korean_text: str) -> str:
+def gpt_feedback(korean_text: str, reflection_text: str = "") -> str:
     """한국어 작문에 대한 한국어 피드백 제공 (기존 함수 유지)"""
     if not OPENAI_OK or client is None:
         return "GPT 사용을 위한 OpenAI API 키가 설정되지 않았거나 문제가 있습니다."
     if not korean_text.strip():
         return "피드백할 텍스트가 없습니다."
+        
+    reflection_info = ""
+    if reflection_text:
+        reflection_info = f"""
+        학습자가 남긴 성찰 내용:
+        {reflection_text}
+        
+        **이 성찰 내용을 참고하여, 학습자가 어려움을 느꼈거나 개선하고 싶다고 언급한 부분을 중심으로 피드백을 강화해주세요.**
+        """
 
     prompt = f"""
     당신은 한국인 학습자를 위한 글쓰기 지도교사입니다. 다음 비교 설명문을 평가하고 건설적인 피드백을 한국어로 제공하세요.
@@ -624,6 +477,8 @@ def gpt_feedback(korean_text: str) -> str:
     - 문법적 정확성, 문장 구조의 다양성, 어휘 선택의 적절성
 
     각 영역별로 구체적인 피드백과 3-5개의 개선 제안을 제공해주세요.
+
+    {reflection_info}
 
     평가 대상 글:
     {korean_text}
@@ -685,8 +540,8 @@ def translate_to_english(text: str) -> str:
     except Exception as e:
         return f"번역 실패: {e}"
 
-def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
-    """텍스트를 DOCX 파일로 변환하여 바이트 데이터 반환"""
+def create_docx_content(text: str, analysis_data: Dict[str, Any]) -> bytes:
+    """텍스트와 분석 데이터를 DOCX 파일로 변환하여 바이트 데이터 반환"""
     doc = Document()
     doc.add_heading('News Comparison Analysis', 0)
     doc.add_paragraph(f"작성일: {datetime.datetime.now().strftime('%Y년 %m월 %d일 %H:%M')}")
@@ -696,28 +551,17 @@ def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
         doc.add_heading('분석 요약', level=1)
         
         for key, value in analysis_data.items():
-            if key == "논조분석1":
-                formatted_analysis1 = format_analysis_for_display(value, "analysis")
-                doc.add_paragraph(format_for_docx(formatted_analysis1, "논조분석1"))
+            if isinstance(value, dict) and "error" not in value:
+                format_docx_section(doc, key, value)
+            elif isinstance(value, str):
+                doc.add_heading(key, level=2)
+                doc.add_paragraph(value)
                 doc.add_paragraph("")
-            elif key == "논조분석2":
-                formatted_analysis2 = format_analysis_for_display(value, "analysis")
-                doc.add_paragraph(format_for_docx(formatted_analysis2, "논조분석2"))
+            else:
+                doc.add_heading(key, level=2)
+                doc.add_paragraph("데이터 없음 또는 오류.")
                 doc.add_paragraph("")
-            elif key == "영어표현평가":
-                formatted_evaluation = format_analysis_for_display(value, "evaluation")
-                doc.add_paragraph(format_for_docx(formatted_evaluation, "영어표현평가"))
-                doc.add_paragraph("")
-            elif key == "문제해결평가":
-                formatted_problem_solving = format_analysis_for_display(value, "assessment")
-                doc.add_paragraph(format_for_docx(formatted_problem_solving, "문제해결평가"))
-                doc.add_paragraph("")
-            elif key == "문단별피드백":
-                doc.add_paragraph(f"문단별피드백:\n{value}")
-                doc.add_paragraph("")
-        
-        doc.add_paragraph("")
-    
+
     doc.add_heading('작성된 설명문', level=1)
     for line in text.splitlines():
         if line.strip():
@@ -728,6 +572,18 @@ def create_docx_content(text: str, analysis_data: dict = None) -> bytes:
         tmp.seek(0)
         return tmp.read()
 
+def read_uploaded_file(uploaded_file) -> str:
+    """업로드된 파일을 읽어서 텍스트 반환"""
+    try:
+        try:
+            content = uploaded_file.read().decode('utf-8')
+        except UnicodeDecodeError:
+            uploaded_file.seek(0)
+            content = uploaded_file.read().decode('euc-kr')
+        return content
+    except Exception as e:
+        return f"파일 읽기 오류: {e}"
+
 # Streamlit 앱 설정
 st.set_page_config(
     page_title="News Comparison Assistant", 
@@ -735,11 +591,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# 세션 상태 초기화
+# 문제 2 해결: 누락된 세션 상태 키들 추가
 if "stage" not in st.session_state:
     st.session_state.update({
         "stage": "input",
         "article1": "", "article2": "",
+        "uploaded_file1_content": "", "uploaded_file2_content": "",
         "summary1": "", "summary2": "",
         "summary1_kr": "", "summary2_kr": "",
         "tone_analysis1": {}, "tone_analysis2": {},
@@ -748,18 +605,20 @@ if "stage" not in st.session_state:
         "problem_solving_score": {},
         "reflection_log": [],
         "final_text": "",
-        "paragraph_feedback": {},  # 문단별 피드백 저장
-        "self_assessment": None,   # 자기평가 결과
-        "enhanced_feedback": ""    # 향상된 피드백
+        "paragraph_feedback": {},
+        # 누락된 키들 추가
+        "intro_input": "",
+        "body1_input": "",
+        "body2_input": "",
+        "compare_input": "",
+        "conclusion_input": ""
     })
 
-# 메인 타이틀과 경고 메시지
 st.title("News Comparison and Writing Assistant")
 
 if not OPENAI_OK:
     st.warning("OpenAI API 키가 설정되지 않았거나 문제가 있습니다. 요약 및 피드백 기능이 비활성화됩니다.")
 
-# 진행 상태 표시
 progress_stages = ["input", "analysis", "draft", "feedback", "final"]
 current_stage_idx = progress_stages.index(st.session_state.stage)
 progress = (current_stage_idx + 1) / len(progress_stages)
@@ -768,38 +627,44 @@ st.progress(progress)
 stage_names = ["기사 입력", "논조 분석", "초안 작성", "AI 피드백", "최종 완성"]
 st.caption(f"현재 단계: {stage_names[current_stage_idx]} ({current_stage_idx + 1}/{len(progress_stages)})")
 
-# 루브릭 사전 표시
 if st.session_state.stage in ["draft", "feedback"]:
     display_rubric()
     st.markdown("---")
 
-# 단계별 화면 구성
-
-# 1단계: 기사 입력
 if st.session_state.stage == "input":
-    st.subheader("1단계. 기사 본문 입력")
+    st.subheader("1단계. 기사 본문 입력 (파일 업로드)")
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.markdown("**기사 1 본문**")
-        error_placeholder1 = st.empty()
-        article1 = st.text_area(
-            "첫 번째 기사의 본문을 입력하세요",
-            value=st.session_state.get("article1", ""),
-            height=300,
-            key="article1_input"
+        st.markdown("**기사 1**")
+        uploaded_file1 = st.file_uploader(
+            "첫 번째 기사 파일 업로드 (.txt)", 
+            type=['txt'], 
+            key="file1",
+            help="UTF-8 또는 EUC-KR 인코딩된 텍스트 파일을 드래그하여 업로드하세요 (최대 10MB)"
         )
+        
+        if uploaded_file1:
+            st.session_state.uploaded_file1_content = read_uploaded_file(uploaded_file1)
+            st.session_state.article1 = st.session_state.uploaded_file1_content
+            if st.session_state.uploaded_file1_content.startswith("파일 읽기 오류"):
+                st.error(st.session_state.uploaded_file1_content)
     
     with col2:
-        st.markdown("**기사 2 본문**")
-        error_placeholder2 = st.empty()
-        article2 = st.text_area(
-            "두 번째 기사의 본문을 입력하세요",
-            value=st.session_state.get("article2", ""),
-            height=300,
-            key="article2_input"
+        st.markdown("**기사 2**")
+        uploaded_file2 = st.file_uploader(
+            "두 번째 기사 파일 업로드 (.txt)", 
+            type=['txt'], 
+            key="file2",
+            help="UTF-8 또는 EUC-KR 인코딩된 텍스트 파일을 드래그하여 업로드하세요 (최대 10MB)"
         )
+        
+        if uploaded_file2:
+            st.session_state.uploaded_file2_content = read_uploaded_file(uploaded_file2)
+            st.session_state.article2 = st.session_state.uploaded_file2_content
+            if st.session_state.uploaded_file2_content.startswith("파일 읽기 오류"):
+                st.error(st.session_state.uploaded_file2_content)
     
     st.markdown("---")
     
@@ -808,41 +673,39 @@ if st.session_state.stage == "input":
         overall_error_placeholder = st.empty()
         if st.button("다음 단계 → (분석 시작)", type="primary", use_container_width=True):
             is_valid = True
-            if not article1.strip():
-                error_placeholder1.error("기사 1 본문을 입력해주세요.")
+            if not st.session_state.article1.strip():
+                st.error("기사 1 파일을 업로드해주세요.")
                 is_valid = False
-            else:
-                error_placeholder1.empty()
 
-            if not article2.strip():
-                error_placeholder2.error("기사 2 본문을 입력해주세요.")
+            if not st.session_state.article2.strip():
+                st.error("기사 2 파일을 업로드해주세요.")
                 is_valid = False
-            else:
-                error_placeholder2.empty()
 
             if is_valid:
-                overall_error_placeholder.empty()
-                st.session_state.article1 = article1
-                st.session_state.article2 = article2
                 st.session_state.stage = "analysis"
                 st.rerun()
             else:
-                overall_error_placeholder.error("모든 필수 입력 필드를 채워주세요.")
+                st.warning("모든 필수 입력 필드를 채워주세요.")
 
-# 2단계: 논조 분석 및 시각화
 elif st.session_state.stage == "analysis":
     st.subheader("2단계. 논조 분석 및 요약")
     
-    if not st.session_state.get("summary1"):
-        with st.spinner("기사 분석 및 요약을 생성하고 있습니다... 잠시만 기다려주세요."):
+    if not st.session_state.get("summary1") or not st.session_state.get("tone_analysis1"):
+        with st.spinner("기사 분석 및 요약을 생성하고 있습니다..."):
+            st.info("기사 1 요약 중...", icon="📝")
             st.session_state.summary1 = summarize_text(st.session_state.article1)
+            st.info("기사 2 요약 중...", icon="📝")
             st.session_state.summary2 = summarize_text(st.session_state.article2)
             
+            st.info("기사 1 논조 분석 중...", icon="🔎")
             st.session_state.tone_analysis1 = analyze_tone_and_stance(st.session_state.article1)
+            st.info("기사 2 논조 분석 중...", icon="🔎")
             st.session_state.tone_analysis2 = analyze_tone_and_stance(st.session_state.article2)
             
+            st.info("요약문 번역 중...", icon="🌐")
             st.session_state.summary1_kr = translate_to_korean(st.session_state.summary1)
             st.session_state.summary2_kr = translate_to_korean(st.session_state.summary2)
+        st.success("모든 분석이 완료되었습니다!")
     
     col1, col2 = st.columns(2)
     
@@ -886,15 +749,12 @@ elif st.session_state.stage == "analysis":
             else:
                 st.error(analysis2.get("error", "분석 오류"))
     
-    # 논조 시각화
     st.markdown("---")
     create_enhanced_comparison_chart(st.session_state.tone_analysis1, st.session_state.tone_analysis2)
     
-    # 감정적 언어 시각화
     st.markdown("---")
     display_emotional_words(st.session_state.tone_analysis1, st.session_state.tone_analysis2)
     
-    # 성찰 질문
     st.markdown("---")
     st.markdown("#### 분석 성찰")
     reflection_error_placeholder = st.empty()
@@ -924,24 +784,29 @@ elif st.session_state.stage == "analysis":
                 st.session_state.stage = "draft"
                 st.rerun()
 
-# 3단계: 초안 작성 (문단별 피드백 기능 추가)
 elif st.session_state.stage == "draft":
     st.subheader("3단계. 비교 설명문 초안 작성")
 
+    # 문제 4 해결: 개선된 문단 입력 함수
     def paragraph_input_with_guide(title, key, guide_title, guide_lines, summary_text=None, hint_key=None, hint_prompt=None):
         col1, col2 = st.columns([2, 1])
         with col1:
             st.subheader(title)
-            if key not in st.session_state:
-                st.session_state[key] = ""
             
-            error_key = f"{key}_error_placeholder"
-            if error_key not in st.session_state:
-                st.session_state[error_key] = st.empty()
+            # 현재 값 가져오기
+            current_value = st.session_state.get(key, "")
             
-            user_input = st.text_area("", key=key, height=160)
+            # 고유한 키로 text_area 생성
+            user_input = st.text_area(
+                "", 
+                value=current_value, 
+                key=f"input_{key}_{st.session_state.stage}", 
+                height=160
+            )
             
-            # 문단별 완료 버튼 및 피드백
+            # 세션 상태 업데이트
+            st.session_state[key] = user_input
+            
             col1_1, col1_2 = st.columns([1, 1])
             with col1_1:
                 if st.button(f"{title.split(' ')[0]} 완료", key=f"{key}_complete"):
@@ -963,7 +828,6 @@ elif st.session_state.stage == "draft":
                         score = feedback.get('추천점수', 'N/A')
                         st.metric("추천점수", f"{score}/4점")
             
-            # 문단별 피드백 표시
             if key in st.session_state.paragraph_feedback:
                 feedback = st.session_state.paragraph_feedback[key]
                 if "error" not in feedback:
@@ -1067,11 +931,11 @@ elif st.session_state.stage == "draft":
     st.markdown("### 전체 초안 미리보기")
 
     full_draft = "\n\n".join([
-        f"[서론]\n{intro}",
-        f"[본론 1 - 기사 1]\n{body1}",
-        f"[본론 2 - 기사 2]\n{body2}",
-        f"[비교 분석]\n{compare}",
-        f"[결론]\n{conclusion}"
+        f"[서론]\n{st.session_state.intro_input}",
+        f"[본론 1 - 기사 1]\n{st.session_state.body1_input}",
+        f"[본론 2 - 기사 2]\n{st.session_state.body2_input}",
+        f"[비교 분석]\n{st.session_state.compare_input}",
+        f"[결론]\n{st.session_state.conclusion_input}"
     ])
 
     st.session_state.draft = full_draft
@@ -1080,7 +944,6 @@ elif st.session_state.stage == "draft":
 <pre style="white-space: pre-wrap; word-wrap: break-word;">{full_draft}</pre>
 </div>""", unsafe_allow_html=True)
 
-    # 문단별 피드백 요약
     if st.session_state.paragraph_feedback:
         st.markdown("---")
         st.markdown("### 문단별 피드백 요약")
@@ -1096,24 +959,11 @@ elif st.session_state.stage == "draft":
     with col_btn2:
         overall_draft_error = st.empty()
         if st.button("AI 피드백 받기 →", type="primary", use_container_width=True):
-            paragraphs = [
-                (intro, "intro_input", "서론"),
-                (body1, "body1_input", "본론 1"),
-                (body2, "body2_input", "본론 2"),
-                (compare, "compare_input", "비교 분석"),
-                (conclusion, "conclusion_input", "결론")
-            ]
+            paragraphs = [st.session_state.intro_input, st.session_state.body1_input,
+                          st.session_state.body2_input, st.session_state.compare_input,
+                          st.session_state.conclusion_input]
             
-            is_valid = True
-            for content, key, title in paragraphs:
-                error_key = f"{key}_error_placeholder"
-                if not content.strip():
-                    if error_key in st.session_state:
-                        st.session_state[error_key].error(f"{title} 부분을 작성해주세요.")
-                    is_valid = False
-                else:
-                    if error_key in st.session_state:
-                        st.session_state[error_key].empty()
+            is_valid = all(p.strip() for p in paragraphs)
             
             if is_valid:
                 overall_draft_error.empty()
@@ -1122,9 +972,8 @@ elif st.session_state.stage == "draft":
             else:
                 overall_draft_error.error("모든 문단을 작성해주세요.")
 
-# 4단계: 자기평가 및 향상된 AI 피드백
 elif st.session_state.stage == "feedback":
-    st.subheader("4단계. 자기평가 및 AI 피드백")
+    st.subheader("4단계. AI 피드백")
     
     col1, col2 = st.columns([1, 1])
     
@@ -1139,107 +988,71 @@ elif st.session_state.stage == "feedback":
         )
     
     with col2:
-        # 자기평가가 아직 완료되지 않았으면 자기평가 인터페이스 표시
-        if not st.session_state.self_assessment:
-            st.markdown("**1단계: 자기평가**")
-            self_assessment_data = self_assessment_interface()
+        st.markdown("**AI 피드백**")
+        
+        # AI 피드백 생성 (한 번만)
+        if not st.session_state.get("feedback"):
+            if OPENAI_OK:
+                with st.spinner("AI 피드백을 생성하고 있습니다..."):
+                    st.info("종합 피드백 생성 중...", icon="🧠")
+                    feedback = gpt_feedback(st.session_state.draft)
+                    st.session_state.feedback = feedback
+                    
+                    st.info("영어 표현 능력 평가 중...", icon="📝")
+                    english_draft = translate_to_english(st.session_state.draft)
+                    st.session_state.writing_evaluation = evaluate_writing_rubric(english_draft)
+            else:
+                st.session_state.feedback = "AI 피드백 기능이 비활성화되어 있습니다."
+        
+        tab1, tab2 = st.tabs(["AI 피드백", "루브릭 평가"])
+        
+        with tab1:
+            st.text_area(
+                "AI 피드백",
+                value=st.session_state.feedback,
+                height=400,
+                disabled=True
+            )
+        
+        with tab2:
+            st.markdown("#### 영어 표현 능력 평가")
+            eval_data = format_analysis_for_display(st.session_state.writing_evaluation, "evaluation")
             
-            # 자기평가 완료 버튼
-            if st.button("자기평가 완료 → AI 피드백 받기", type="primary"):
-                # 모든 필드가 채워졌는지 확인 (개선된 로직)
-                errors = []
-                for category in ["내용논리성", "구성체계성", "문법어휘정확성"]:
-                    if not self_assessment_data["reflections"][category].strip():
-                        errors.append(f"{category} 평가 이유를 작성해주세요.")
+            if "error" not in eval_data:
+                col1, col2, col3 = st.columns(3)
                 
-                if not self_assessment_data["overall_reflection"].strip():
-                    errors.append("전체적인 자기 성찰을 작성해주세요.")
-
-                if errors:
-                    for error in errors:
-                        st.error(error)
-                else:
-                    st.session_state.self_assessment = self_assessment_data
-                    st.rerun()
-        else:
-            # 자기평가가 완료되면 AI 피드백 표시
-            st.markdown("**2단계: AI 피드백**")
-            
-            # AI 피드백 생성 (한 번만)
-            if not st.session_state.enhanced_feedback:
-                if OPENAI_OK:
-                    with st.spinner("자기평가를 반영한 맞춤형 피드백을 생성하고 있습니다..."):
-                        enhanced_feedback = enhanced_gpt_feedback(
-                            st.session_state.draft, 
-                            st.session_state.self_assessment,
-                            st.session_state.paragraph_feedback
-                        )
-                        st.session_state.enhanced_feedback = enhanced_feedback
-                        
-                        # 기존 루브릭 평가도 실행
-                        english_draft = translate_to_english(st.session_state.draft)
-                        st.session_state.writing_evaluation = evaluate_writing_rubric(english_draft)
-                else:
-                    st.session_state.enhanced_feedback = "AI 피드백 기능이 비활성화되어 있습니다."
-            
-            # 탭으로 구분하여 표시
-            tab1, tab2, tab3 = st.tabs(["맞춤형 피드백", "루브릭 평가", "자기평가 결과"])
-            
-            with tab1:
-                st.text_area(
-                    "자기평가 기반 맞춤형 피드백",
-                    value=st.session_state.enhanced_feedback,
-                    height=400,
-                    disabled=True
-                )
-            
-            with tab2:
-                st.markdown("#### 영어 표현 능력 평가")
-                eval_data = format_analysis_for_display(st.session_state.writing_evaluation, "evaluation")
+                with col1:
+                    if "내용논리성" in eval_data and isinstance(eval_data["내용논리성"], dict):
+                        logic = eval_data["내용논리성"]
+                        st.metric("내용 논리성", f"{logic.get('점수', 0)}/4점")
+                        st.caption(logic.get('근거', ''))
+                    else:
+                        st.metric("내용 논리성", "N/A")
                 
-                if "error" not in eval_data:
-                    col1, col2, col3 = st.columns(3)
-                    
-                    with col1:
-                        if "내용논리성" in eval_data and isinstance(eval_data["내용논리성"], dict):
-                            logic = eval_data["내용논리성"]
-                            st.metric("내용 논리성", f"{logic.get('점수', 0)}/4점")
-                            st.caption(logic.get('근거', ''))
-                        else:
-                            st.metric("내용 논리성", "N/A")
-                    
-                    with col2:
-                        if "구성체계성" in eval_data and isinstance(eval_data["구성체계성"], dict):
-                            org = eval_data["구성체계성"]
-                            st.metric("구성 체계성", f"{org.get('점수', 0)}/4점")
-                            st.caption(org.get('근거', ''))
-                        else:
-                            st.metric("구성 체계성", "N/A")
-                    
-                    with col3:
-                        if "문법어휘정확성" in eval_data and isinstance(eval_data["문법어휘정확성"], dict):
-                            lang = eval_data["문법어휘정확성"]
-                            st.metric("문법·어휘", f"{lang.get('점수', 0)}/4점")
-                            st.caption(lang.get('근거', ''))
-                        else:
-                            st.metric("문법·어휘", "N/A")
-                    
-                    if eval_data.get('총점'):
-                        st.markdown(f"**총점**: {eval_data['총점']}")
-                    
-                    if eval_data.get('종합평가'):
-                        st.markdown("**종합 평가**")
-                        st.info(eval_data['종합평가'])
-                else:
-                    st.error(eval_data.get("error", "평가 오류"))
-            
-            with tab3:
-                st.markdown("#### 나의 자기평가 결과")
-                for category, score in st.session_state.self_assessment["scores"].items():
-                    st.markdown(f"**{category}**: {score}점")
-                    st.caption(st.session_state.self_assessment["reflections"][category])
-                st.markdown("**전체 성찰**")
-                st.info(st.session_state.self_assessment["overall_reflection"])
+                with col2:
+                    if "구성체계성" in eval_data and isinstance(eval_data["구성체계성"], dict):
+                        org = eval_data["구성체계성"]
+                        st.metric("구성 체계성", f"{org.get('점수', 0)}/4점")
+                        st.caption(org.get('근거', ''))
+                    else:
+                        st.metric("구성 체계성", "N/A")
+                
+                with col3:
+                    if "문법어휘정확성" in eval_data and isinstance(eval_data["문법어휘정확성"], dict):
+                        lang = eval_data["문법어휘정확성"]
+                        st.metric("문법·어휘", f"{lang.get('점수', 0)}/4점")
+                        st.caption(lang.get('근거', ''))
+                    else:
+                        st.metric("문법·어휘", "N/A")
+                
+                if eval_data.get('총점'):
+                    st.markdown(f"**총점**: {eval_data['총점']}")
+                
+                if eval_data.get('종합평가'):
+                    st.markdown("**종합 평가**")
+                    st.info(eval_data['종합평가'])
+            else:
+                st.error(eval_data.get("error", "평가 오류"))
     
     st.markdown("---")
     st.markdown("#### 피드백 성찰")
@@ -1267,12 +1080,11 @@ elif st.session_state.stage == "feedback":
                     "content": feedback_reflection,
                     "timestamp": datetime.datetime.now()
                 })
-                # 문제해결 역량 평가 수행
-                st.session_state.problem_solving_score = assess_problem_solving(feedback_reflection)
+                with st.spinner("성찰 내용을 바탕으로 문제해결 역량 평가 중..."):
+                    st.session_state.problem_solving_score = assess_problem_solving(feedback_reflection)
                 st.session_state.stage = "final"
                 st.rerun()
 
-# 5단계: 최종 완성
 elif st.session_state.stage == "final":
     st.subheader("5단계. 최종 수정 및 완성")
     
@@ -1295,17 +1107,14 @@ elif st.session_state.stage == "final":
     with col2:
         st.markdown("**종합 평가 결과**")
         
-        # 문제해결 역량 평가 결과
         if st.session_state.problem_solving_score:
             with st.expander("문제해결 역량 평가", expanded=True):
                 problem_data = format_analysis_for_display(st.session_state.problem_solving_score, "assessment")
                 
                 if "error" not in problem_data:
-                    # assessment 키가 있는 경우 (간단한 텍스트 응답)
                     if "assessment" in problem_data:
                         st.info(problem_data["assessment"])
                     else:
-                        # 4개 영역을 2x2 그리드로 배치
                         col1, col2 = st.columns(2)
                         
                         areas = ["문제이해", "분석적사고", "대안발견및기획", "의사소통"]
@@ -1327,7 +1136,6 @@ elif st.session_state.stage == "final":
                 else:
                     st.error(problem_data.get("error", "평가 오류"))
         
-        # 영어 표현 능력 평가 결과
         if st.session_state.writing_evaluation:
             with st.expander("영어 표현 능력 평가", expanded=True):
                 eval_data = format_analysis_for_display(st.session_state.writing_evaluation, "evaluation")
@@ -1371,14 +1179,15 @@ elif st.session_state.stage == "final":
             st.rerun()
 
     with col_btn2:
-        # 종합 보고서 다운로드 (문단별 피드백 포함)
         analysis_summary = {
             "논조분석1": st.session_state.tone_analysis1,
             "논조분석2": st.session_state.tone_analysis2,
             "영어표현평가": st.session_state.writing_evaluation,
-            "문제해결평가": st.session_state.problem_solving_score,
             "문단별피드백": summarize_paragraph_feedback(st.session_state.paragraph_feedback)
         }
+        if st.session_state.problem_solving_score:
+            analysis_summary["문제해결평가"] = st.session_state.problem_solving_score
+            
         docx_data = create_docx_content(final_text, analysis_summary)
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"news_comparison_complete_{timestamp}.docx"
@@ -1393,19 +1202,16 @@ elif st.session_state.stage == "final":
 
     with col_btn4:
         if st.button("처음부터 다시", use_container_width=True):
-            # 세션 상태 초기화
             for key in list(st.session_state.keys()):
                 if key != 'stage':
                     st.session_state.pop(key)
             st.session_state.stage = "input"
             st.rerun()
     
-    # 완성된 작문 미리보기
     if final_text.strip():
         st.markdown("### 완성된 작문 미리보기")
         st.success(final_text)
         
-        # 학습 성찰 로그 표시
         if st.session_state.reflection_log:
             with st.expander("학습 성찰 기록", expanded=False):
                 for idx, log in enumerate(st.session_state.reflection_log):
@@ -1414,15 +1220,14 @@ elif st.session_state.stage == "final":
                     st.caption(f"작성 시간: {log['timestamp']}")
                     st.markdown("---")
 
-# 사이드바 정보
 with st.sidebar:
     st.markdown("### 사용 방법")
     st.markdown("""
-    1. **기사 입력**: 비교할 두 기사의 본문을 입력
+    1. **기사 입력**: 비교할 두 기사의 본문을 파일 업로드
     2. **논조 분석**: AI가 각 기사의 논조와 입장을 분석
     3. **초안 작성**: 분석 결과를 참고하여 비교 설명문 작성
        - 각 문단 완료 시 즉시 피드백 가능
-    4. **자기평가 + AI 피드백**: 루브릭 기반 자기평가 후 맞춤형 AI 피드백
+    4. **AI 피드백**: 루브릭 기반 AI 피드백
     5. **최종 완성**: 피드백을 반영한 수정 후 종합 보고서 다운로드
     """)
     
@@ -1435,18 +1240,16 @@ with st.sidebar:
     st.markdown("### 진행 상황")
     st.markdown(f"현재 단계: **{stage_names[current_stage_idx]}**")
     
-    # 진행 상황 체크리스트
     checklist_items = [
         ("기사 입력", bool(st.session_state.get("article1") and st.session_state.get("article2"))),
         ("논조 분석", bool(st.session_state.get("tone_analysis1") and st.session_state.get("tone_analysis2"))),
         ("초안 작성", bool(st.session_state.get("draft"))),
         ("문단별 피드백", bool(st.session_state.get("paragraph_feedback"))),
-        ("자기평가", bool(st.session_state.get("self_assessment"))),
-        ("AI 피드백", bool(st.session_state.get("enhanced_feedback"))),
+        ("AI 피드백", bool(st.session_state.get("feedback"))),
         ("루브릭 평가", bool(st.session_state.get("writing_evaluation"))),
         ("최종 완성", bool(st.session_state.get("final_text")))
     ]
     
     for item, completed in checklist_items:
-        icon = "완료" if completed else "대기"
-        st.markdown(f"**{icon}**: {item}")
+        icon = "✅" if completed else "⏳"
+        st.markdown(f"{icon} {item}")
